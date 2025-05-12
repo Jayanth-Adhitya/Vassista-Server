@@ -48,10 +48,10 @@ CLIENT_CONFIG = {
             "disabled": False,
             "autoApprove": []
         },
-        "gmail": {
-            "command": "npx",
-            "args": ["@gongrzhe/server-gmail-autoauth-mcp"]
-        }
+        #"gmail": {
+        #    "command": "npx",
+        #    "args": ["@gongrzhe/server-gmail-autoauth-mcp"]
+        #}
     }
 }
 System_Prompt = """# SYSTEM ROLE: AI Interviewer
