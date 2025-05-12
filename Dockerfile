@@ -8,25 +8,21 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Install any needed packages specified in requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+# --no-cache-dir ensures we don't store the pip cache, keeping the image smaller
+# --upgrade pip ensures we have the latest pip version
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Copy the rest of the application code into the container at /app
-COPY main.py .
+# This includes main.py, OpenAIServer.py etc.
+COPY . .
 
-# Make port 7000 available to the world outside this container
-EXPOSE 7000
+# Make port 8000 available to the world outside this container
+EXPOSE 8000
 
-# Define arguments for API keys that can be passed during build time
-ARG CLICKUP_API_TOKEN
-ARG GOOGLE_API_KEY
-ARG GROQ_API_KEY
+ENV GOOGLE_API_KEY="AIzaSyA9rsKvAwQ3JP9WCr0ZW_fE3q832-B4I8s"
+ENV GROQ_API_KEY="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"
+ENV CLICKUP_API_TOKEN="pk_96732703_BMQ18G3SJ5N7TGYFFKAVDXXS0LP6QT1I"
 
-# Set environment variables in the container
-# These will use the build arguments if provided, otherwise they will be unset
-# It's recommended to provide these at runtime for better security and flexibility
-ENV CLICKUP_API_TOKEN=${CLICKUP_API_TOKEN}
-ENV GOOGLE_API_KEY=${GOOGLE_API_KEY}
-ENV GROQ_API_KEY=${GROQ_API_KEY}
-
-# Run main.py when the container launches
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7000"]
+# Run main.py when the container launches using uvicorn
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
