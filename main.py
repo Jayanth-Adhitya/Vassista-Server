@@ -249,68 +249,58 @@ async def transcribe_audio(audio: UploadFile = File(...)):
         logger.error(f"Transcription error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Transcription error: {str(e)}")
 
+from fastapi.responses import StreamingResponse
+
 @app.post("/speak")
 async def text_to_speech(request: TextToSpeechRequest):
     """
-    Convert text to speech using Groq's TTS API
+    Convert text to speech using Groq's TTS API and stream the audio response.
     """
     try:
         logger.info("Processing text-to-speech request using Groq TTS")
-        
-        # Get Groq API key from environment variables
         groq_api_key = os.getenv("GROQ_API_KEY")
         if not groq_api_key:
             logger.error("GROQ_API_KEY not found in environment variables")
             raise HTTPException(status_code=500, detail="GROQ_API_KEY not found in environment variables")
         
-        # Set up the headers for the Groq API request
         headers = {
             "Authorization": f"Bearer {groq_api_key}",
             "Content-Type": "application/json"
         }
-        
-        # Prepare the request payload
         data = {
             "model": "playai-tts",
             "voice": request.voice,
             "input": request.text,
             "response_format": "wav"
         }
-        
-        # Make the request to Groq TTS API
         logger.info(f"Sending TTS request to Groq API with voice: {request.voice}")
-        response = requests.post(
+        # Stream the request to Groq
+        groq_response = requests.post(
             "https://api.groq.com/openai/v1/audio/speech",
             headers=headers,
-            json=data
+            json=data,
+            stream=True  # <--- IMPORTANT
         )
-        
-        # Check if the request was successful
-        if response.status_code != 200:
-            logger.error(f"Groq TTS API error: {response.text}")
+        if groq_response.status_code != 200:
+            logger.error(f"Groq TTS API error: {groq_response.text}")
             raise HTTPException(
-                status_code=response.status_code,
-                detail=f"Groq TTS API error: {response.text}"
+                status_code=groq_response.status_code,
+                detail=f"Groq TTS API error: {groq_response.text}"
             )
-        
-        # Get the audio content
-        audio_content = io.BytesIO(response.content)
-        audio_content.seek(0)
-
-        logger.info("Text-to-speech conversion completed successfully with Groq TTS")
-        
-        # Return the audio as a streaming response
+        # Generator to yield chunks
+        def audio_stream():
+            for chunk in groq_response.iter_content(chunk_size=4096):
+                if chunk:
+                    yield chunk
+        logger.info("Text-to-speech conversion completed successfully with Groq TTS (streaming)")
         return StreamingResponse(
-            audio_content,
+            audio_stream(),
             media_type="audio/wav",
-            headers={
-                "Content-Disposition": "attachment; filename=speech.wav"
-            }
+            headers={"Content-Disposition": "attachment; filename=speech.wav"}
         )
     except Exception as e:
         logger.error(f"Groq TTS error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Groq TTS error: {str(e)}")
-
 if __name__ == "__main__":
     import uvicorn
     print("Starting MCP Proxy Server...")
