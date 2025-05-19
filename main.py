@@ -252,10 +252,11 @@ async def transcribe_audio(audio: UploadFile = File(...)):
 @app.post("/speak")
 async def text_to_speech(request: TextToSpeechRequest):
     """
-    Stream text-to-speech audio from Groq's TTS API to the client.
+    Stream text-to-speech audio from Groq's TTS API to the client as Opus in WebM container.
     """
+    import subprocess
     try:
-        logger.info("Processing text-to-speech request using Groq TTS")
+        logger.info("Processing text-to-speech request using Groq TTS (Opus/WebM streaming)")
         groq_api_key = os.getenv("GROQ_API_KEY")
         if not groq_api_key:
             logger.error("GROQ_API_KEY not found in environment variables")
@@ -272,12 +273,12 @@ async def text_to_speech(request: TextToSpeechRequest):
             "response_format": "wav"
         }
 
-        # Stream the response from Groq
+        # Stream the response from Groq (WAV audio)
         groq_response = requests.post(
             "https://api.groq.com/openai/v1/audio/speech",
             headers=headers,
             json=data,
-            stream=True  # <--- Enable streaming
+            stream=True
         )
 
         if groq_response.status_code != 200:
@@ -287,15 +288,61 @@ async def text_to_speech(request: TextToSpeechRequest):
                 detail=f"Groq TTS API error: {groq_response.text}"
             )
 
-        def audio_stream():
-            for chunk in groq_response.iter_content(chunk_size=4096):
-                if chunk:
-                    yield chunk
+        # Start ffmpeg subprocess to transcode WAV to Opus/WebM
+        ffmpeg_cmd = [
+            "ffmpeg",
+            "-hide_banner", "-loglevel", "error",
+            "-i", "-",  # Input from stdin
+            "-c:a", "libopus",
+            "-f", "webm",
+            "-ar", "48000",
+            "-ac", "1",
+            "-b:a", "64k",
+            "-map", "0:a",
+            "pipe:1"  # Output to stdout
+        ]
+        try:
+            ffmpeg_proc = subprocess.Popen(
+                ffmpeg_cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                bufsize=0
+            )
+        except Exception as e:
+            logger.error(f"Failed to start ffmpeg: {e}")
+            raise HTTPException(status_code=500, detail="Failed to start ffmpeg for audio transcoding.")
+
+        def pipe_wav_to_ffmpeg():
+            try:
+                for chunk in groq_response.iter_content(chunk_size=4096):
+                    if chunk:
+                        ffmpeg_proc.stdin.write(chunk)
+                ffmpeg_proc.stdin.close()
+            except Exception as e:
+                logger.error(f"Error piping WAV to ffmpeg: {e}")
+                try:
+                    ffmpeg_proc.stdin.close()
+                except Exception:
+                    pass
+
+        import threading
+        threading.Thread(target=pipe_wav_to_ffmpeg, daemon=True).start()
+
+        def webm_stream():
+            try:
+                while True:
+                    data = ffmpeg_proc.stdout.read(4096)
+                    if not data:
+                        break
+                    yield data
+            finally:
+                ffmpeg_proc.stdout.close()
+                ffmpeg_proc.wait()
 
         return StreamingResponse(
-            audio_stream(),
-            media_type="audio/wav",
-            headers={"Content-Disposition": "inline; filename=speech.wav"}
+            webm_stream(),
+            media_type="audio/webm",
+            headers={"Content-Disposition": "inline; filename=speech.webm"}
         )
     except Exception as e:
         logger.error(f"Groq TTS error: {str(e)}", exc_info=True)
