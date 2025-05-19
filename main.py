@@ -288,7 +288,6 @@ async def text_to_speech(request: TextToSpeechRequest):
                 detail=f"Groq TTS API error: {groq_response.text}"
             )
 
-        # Start ffmpeg subprocess to transcode WAV to Opus/WebM with low-latency flags
         ffmpeg_cmd = [
             "ffmpeg",
             "-hide_banner", "-loglevel", "error",
@@ -311,54 +310,32 @@ async def text_to_speech(request: TextToSpeechRequest):
             logger.error(f"Failed to start ffmpeg: {e}")
             raise HTTPException(status_code=500, detail="Failed to start ffmpeg for audio transcoding.")
 
-        def pipe_wav_to_ffmpeg():
+        def stream_webm():
             try:
+                # Write Groq's WAV chunks to ffmpeg stdin and yield ffmpeg's stdout
                 for chunk in groq_response.iter_content(chunk_size=4096):
                     if chunk:
                         ffmpeg_proc.stdin.write(chunk)
+                        ffmpeg_proc.stdin.flush()
+                    # Read and yield available output from ffmpeg
+                    while ffmpeg_proc.stdout and ffmpeg_proc.stdout.peek(1):
+                        data = ffmpeg_proc.stdout.read(4096)
+                        if not data:
+                            break
+                        yield data
                 ffmpeg_proc.stdin.close()
-            except Exception as e:
-                logger.error(f"Error piping WAV to ffmpeg: {e}")
-                try:
-                    ffmpeg_proc.stdin.close()
-                except Exception:
-                    pass
-
-        import threading
-        threading.Thread(target=pipe_wav_to_ffmpeg, daemon=True).start()
-
-        def stream_webm():
-            ffmpeg = subprocess.Popen(
-                [
-                    "ffmpeg",
-                    "-i", "pipe:0",
-                    "-c:a", "libopus",
-                    "-b:a", "64k",
-                    "-f", "webm",
-                    "-flush_packets", "1",
-                    "-fflags", "+nobuffer",
-                    "pipe:1"
-                ],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                bufsize=0
-            )
-            try:
-                # Write Groq's WAV chunks to ffmpeg stdin
-                for chunk in groq_response.iter_content(chunk_size=4096):
-                    if chunk:
-                        ffmpeg.stdin.write(chunk)
-                ffmpeg.stdin.close()
-                # Stream ffmpeg's WebM output to the client
+                # After input is done, yield remaining output
                 while True:
-                    data = ffmpeg.stdout.read(4096)
+                    data = ffmpeg_proc.stdout.read(4096)
                     if not data:
                         break
                     yield data
             finally:
-                ffmpeg.terminate()
-        #return StreamingResponse(stream_webm(), media_type="audio/webm")
+                try:
+                    ffmpeg_proc.stdout.close()
+                except Exception:
+                    pass
+                ffmpeg_proc.wait()
 
         return StreamingResponse(
             stream_webm(),
