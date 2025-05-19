@@ -4,14 +4,13 @@ import tempfile
 import requests
 import io
 import logging
-from fastapi import FastAPI, HTTPException, UploadFile, File, Query
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from fastapi.middleware.cors import CORSMiddleware
 from mcp_use import MCPAgent, MCPClient
-import subprocess
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -253,139 +252,54 @@ async def transcribe_audio(audio: UploadFile = File(...)):
 @app.post("/speak")
 async def text_to_speech(request: TextToSpeechRequest):
     """
-    Convert text to speech using Groq's TTS API
+    Stream text-to-speech audio from Groq's TTS API to the client.
     """
     try:
         logger.info("Processing text-to-speech request using Groq TTS")
-        
-        # Get Groq API key from environment variables
         groq_api_key = os.getenv("GROQ_API_KEY")
         if not groq_api_key:
             logger.error("GROQ_API_KEY not found in environment variables")
             raise HTTPException(status_code=500, detail="GROQ_API_KEY not found in environment variables")
-        
-        # Set up the headers for the Groq API request
+
         headers = {
             "Authorization": f"Bearer {groq_api_key}",
             "Content-Type": "application/json"
         }
-        
-        # Prepare the request payload
         data = {
             "model": "playai-tts",
             "voice": request.voice,
             "input": request.text,
             "response_format": "wav"
         }
-        
-        # Make the request to Groq TTS API
-        logger.info(f"Sending TTS request to Groq API with voice: {request.voice}")
-        response = requests.post(
+
+        # Stream the response from Groq
+        groq_response = requests.post(
             "https://api.groq.com/openai/v1/audio/speech",
             headers=headers,
-            json=data
+            json=data,
+            stream=True  # <--- Enable streaming
         )
-        
-        # Check if the request was successful
-        if response.status_code != 200:
-            logger.error(f"Groq TTS API error: {response.text}")
-            raise HTTPException(
-                status_code=response.status_code,
-                detail=f"Groq TTS API error: {response.text}"
-            )
-        
-        # Get the audio content
-        audio_content = io.BytesIO(response.content)
-        audio_content.seek(0)
 
-        logger.info("Text-to-speech conversion completed successfully with Groq TTS")
-        
-        # Return the audio as a streaming response
+        if groq_response.status_code != 200:
+            logger.error(f"Groq TTS API error: {groq_response.text}")
+            raise HTTPException(
+                status_code=groq_response.status_code,
+                detail=f"Groq TTS API error: {groq_response.text}"
+            )
+
+        def audio_stream():
+            for chunk in groq_response.iter_content(chunk_size=4096):
+                if chunk:
+                    yield chunk
+
         return StreamingResponse(
-            audio_content,
+            audio_stream(),
             media_type="audio/wav",
-            headers={
-                "Content-Disposition": "attachment; filename=speech.wav"
-            }
+            headers={"Content-Disposition": "inline; filename=speech.wav"}
         )
     except Exception as e:
         logger.error(f"Groq TTS error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Groq TTS error: {str(e)}")
-
-@app.get("/speak/stream", response_class=StreamingResponse)
-async def speak_stream(
-    text: str = Query(..., description="Text to synthesize"),
-    voice: str = Query("Fritz-PlayAI", description="Voice name")
-):
-    """
-    Stream TTS audio as fragmented MP4 (fMP4) for MSE playback.
-    """
-    try:
-        logger.info(f"Processing streaming TTS request: text='{text[:30]}...', voice='{voice}'")
-        groq_api_key = os.getenv("GROQ_API_KEY")
-        if not groq_api_key:
-            logger.error("GROQ_API_KEY not found in environment variables")
-            raise HTTPException(status_code=500, detail="GROQ_API_KEY not found in environment variables")
-        headers = {
-            "Authorization": f"Bearer {groq_api_key}",
-            "Content-Type": "application/json"
-        }
-        data = {
-            "model": "playai-tts",
-            "voice": voice,
-            "input": text,
-            "response_format": "wav"
-        }
-        # Call Groq TTS API to get WAV bytes
-        response = requests.post(
-            "https://api.groq.com/openai/v1/audio/speech",
-            headers=headers,
-            json=data
-        )
-        if response.status_code != 200:
-            logger.error(f"Groq TTS API error: {response.text}")
-            raise HTTPException(
-                status_code=response.status_code,
-                detail=f"Groq TTS API error: {response.text}"
-            )
-        wav_bytes = response.content
-        # Pipe WAV to ffmpeg for fMP4 streaming
-        ffmpeg_cmd = [
-            "ffmpeg",
-            "-hide_banner", "-loglevel", "error",
-            "-i", "pipe:0",
-            "-c:a", "aac", "-b:a", "64k",
-            "-movflags", "frag_keyframe+empty_moov+default_base_moof",
-            "-f", "mp4",
-            "pipe:1"
-        ]
-        proc = subprocess.Popen(
-            ffmpeg_cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            bufsize=0
-        )
-        proc.stdin.write(wav_bytes)
-        proc.stdin.close()
-        def stream_fragments():
-            try:
-                while True:
-                    chunk = proc.stdout.read(4096)
-                    if not chunk:
-                        break
-                    yield chunk
-            finally:
-                proc.stdout.close()
-                proc.wait()
-        logger.info("Streaming fMP4 fragments to client")
-        return StreamingResponse(
-            stream_fragments(),
-            media_type="audio/mp4",
-            headers={"Cache-Control": "no-store"}
-        )
-    except Exception as e:
-        logger.error(f"Streaming TTS error: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Streaming TTS error: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
