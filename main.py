@@ -255,6 +255,7 @@ async def text_to_speech(request: TextToSpeechRequest):
     Stream text-to-speech audio from Groq's TTS API to the client as Opus in WebM container, using low-latency ffmpeg flags.
     """
     import subprocess
+    import threading
     try:
         logger.info("Processing text-to-speech request using Groq TTS (Opus/WebM streaming, low-latency)")
         groq_api_key = os.getenv("GROQ_API_KEY")
@@ -310,21 +311,23 @@ async def text_to_speech(request: TextToSpeechRequest):
             logger.error(f"Failed to start ffmpeg: {e}")
             raise HTTPException(status_code=500, detail="Failed to start ffmpeg for audio transcoding.")
 
-        def stream_webm():
+        def feed_ffmpeg():
             try:
-                # Write Groq's WAV chunks to ffmpeg stdin and yield ffmpeg's stdout
                 for chunk in groq_response.iter_content(chunk_size=4096):
                     if chunk:
                         ffmpeg_proc.stdin.write(chunk)
-                        ffmpeg_proc.stdin.flush()
-                    # Read and yield available output from ffmpeg
-                    while ffmpeg_proc.stdout and ffmpeg_proc.stdout.peek(1):
-                        data = ffmpeg_proc.stdout.read(4096)
-                        if not data:
-                            break
-                        yield data
                 ffmpeg_proc.stdin.close()
-                # After input is done, yield remaining output
+            except Exception as e:
+                logger.error(f"Error piping WAV to ffmpeg: {e}")
+                try:
+                    ffmpeg_proc.stdin.close()
+                except Exception:
+                    pass
+
+        threading.Thread(target=feed_ffmpeg, daemon=True).start()
+
+        def stream_webm():
+            try:
                 while True:
                     data = ffmpeg_proc.stdout.read(4096)
                     if not data:
