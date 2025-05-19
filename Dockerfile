@@ -4,15 +4,15 @@ FROM python:3.11-slim
 # Set the working directory in the container
 WORKDIR /app
 
-# Install dependencies
+# Install dependencies including ffmpeg
 RUN apt-get update && \
-    apt-get install -y curl && \
+    apt-get install -y curl ffmpeg && \
     curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
     apt-get install -y nodejs && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Confirm versions (optional debug)
-RUN node -v && npm -v && npx --version
+RUN node -v && npm -v && npx --version && ffmpeg -version
 
 # Copy the requirements file into the container
 COPY requirements.txt .
