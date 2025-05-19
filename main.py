@@ -327,19 +327,41 @@ async def text_to_speech(request: TextToSpeechRequest):
         import threading
         threading.Thread(target=pipe_wav_to_ffmpeg, daemon=True).start()
 
-        def webm_stream():
+        def stream_webm():
+            ffmpeg = subprocess.Popen(
+                [
+                    "ffmpeg",
+                    "-i", "pipe:0",
+                    "-c:a", "libopus",
+                    "-b:a", "64k",
+                    "-f", "webm",
+                    "-flush_packets", "1",
+                    "-fflags", "+nobuffer",
+                    "pipe:1"
+                ],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                bufsize=0
+            )
             try:
+                # Write Groq's WAV chunks to ffmpeg stdin
+                for chunk in groq_response.iter_content(chunk_size=4096):
+                    if chunk:
+                        ffmpeg.stdin.write(chunk)
+                ffmpeg.stdin.close()
+                # Stream ffmpeg's WebM output to the client
                 while True:
-                    data = ffmpeg_proc.stdout.read(4096)
+                    data = ffmpeg.stdout.read(4096)
                     if not data:
                         break
                     yield data
             finally:
-                ffmpeg_proc.stdout.close()
-                ffmpeg_proc.wait()
+                ffmpeg.terminate()
+        #return StreamingResponse(stream_webm(), media_type="audio/webm")
 
         return StreamingResponse(
-            webm_stream(),
+            stream_webm(),
             media_type="audio/webm",
             headers={"Content-Disposition": "inline; filename=speech.webm"}
         )
