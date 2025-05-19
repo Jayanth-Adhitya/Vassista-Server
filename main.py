@@ -252,11 +252,11 @@ async def transcribe_audio(audio: UploadFile = File(...)):
 @app.post("/speak")
 async def text_to_speech(request: TextToSpeechRequest):
     """
-    Stream text-to-speech audio from Groq's TTS API to the client as Opus in WebM container.
+    Stream text-to-speech audio from Groq's TTS API to the client as Opus in WebM container, using low-latency ffmpeg flags.
     """
     import subprocess
     try:
-        logger.info("Processing text-to-speech request using Groq TTS (Opus/WebM streaming)")
+        logger.info("Processing text-to-speech request using Groq TTS (Opus/WebM streaming, low-latency)")
         groq_api_key = os.getenv("GROQ_API_KEY")
         if not groq_api_key:
             logger.error("GROQ_API_KEY not found in environment variables")
@@ -288,18 +288,17 @@ async def text_to_speech(request: TextToSpeechRequest):
                 detail=f"Groq TTS API error: {groq_response.text}"
             )
 
-        # Start ffmpeg subprocess to transcode WAV to Opus/WebM
+        # Start ffmpeg subprocess to transcode WAV to Opus/WebM with low-latency flags
         ffmpeg_cmd = [
             "ffmpeg",
             "-hide_banner", "-loglevel", "error",
-            "-i", "-",  # Input from stdin
+            "-i", "pipe:0",
             "-c:a", "libopus",
-            "-f", "webm",
-            "-ar", "48000",
-            "-ac", "1",
             "-b:a", "64k",
-            "-map", "0:a",
-            "pipe:1"  # Output to stdout
+            "-f", "webm",
+            "-flush_packets", "1",
+            "-fflags", "+nobuffer",
+            "pipe:1"
         ]
         try:
             ffmpeg_proc = subprocess.Popen(
