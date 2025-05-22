@@ -1,0 +1,15 @@
+{
+  "INTERVIEWER_NAME": "Jamie",
+  "POSITION_DESCRIPTION": "the Customer Support Lead role",
+  "CANDIDATE_NAME": "Alex Johnson",
+  "ESTIMATED_DURATION": "45 minutes",
+  "QUESTION_LIST": [
+    "Describe your experience leading a team at Acme Corp. Can you provide a specific example of a challenging situation you faced and how you navigated it?",
+    "You mentioned a major migration project to cloud-native infrastructure. Can you walk me through the architectural decisions you made during this project and the trade-offs you considered?",
+    "Given your background in backend systems and APIs, how do you approach designing a RESTful API that is both scalable and maintainable? What are some key considerations?",
+    "With your experience in Python, describe your familiarity with asynchronous programming (e.g., asyncio). How have you used it to improve the performance of backend systems?",
+    "Tell me about a time you had to debug a complex issue in a distributed system. What tools and techniques did you use to diagnose the problem, and what was the root cause?",
+    "Scalability is important to you. Can you describe a situation where you had to optimize a system for increased load? What metrics did you use to measure success, and what specific changes did you make?"
+  ],
+  "EVALUATION_FOCUS": "Look for specific examples, use of STAR method for behavioral questions, clear communication, understanding of support metrics, leadership examples."
+}

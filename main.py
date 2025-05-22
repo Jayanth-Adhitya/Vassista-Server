@@ -4,6 +4,7 @@ import tempfile
 import requests
 import io
 import logging
+import json
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -11,6 +12,9 @@ from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from fastapi.middleware.cors import CORSMiddleware
 from mcp_use import MCPAgent, MCPClient
+from QuestionGenerator import get_gemini_question_generator
+from contextlib import asynccontextmanager
+from typing import AsyncGenerator
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -19,11 +23,43 @@ logger = logging.getLogger(__name__)
 # Load environment variables
 load_dotenv()
 
+async def startup_generate_questions():
+    try:
+        user_context_path = os.path.join(os.path.dirname(__file__), 'user_context.json')
+        with open(user_context_path, 'r', encoding='utf-8') as f:
+            user_context = json.load(f)
+        generator = get_gemini_question_generator()
+        questions = await generator.generate_questions(
+            interview_type=user_context.get("INTERVIEW_TYPE", ""),
+            resume=user_context.get("RESUME", ""),
+            cover_letter=user_context.get("COVER_LETTER", ""),
+            background_story=user_context.get("BACKGROUND_STORY", ""),
+            num_questions=user_context.get("NUM_QUESTIONS", 6)
+        )
+        context_path = os.path.join(os.path.dirname(__file__), 'interview_context.json')
+        if os.path.exists(context_path):
+            with open(context_path, 'r', encoding='utf-8') as f:
+                interview_context = json.load(f)
+        else:
+            interview_context = {}
+        interview_context["QUESTION_LIST"] = questions
+        with open(context_path, 'w', encoding='utf-8') as f:
+            json.dump(interview_context, f, indent=2)
+        logger.info("Questions generated and interview_context.json updated on startup.")
+    except Exception as e:
+        logger.error(f"Startup question generation failed: {str(e)}", exc_info=True)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    asyncio.create_task(startup_generate_questions())
+    yield
+
 # Initialize FastAPI
 app = FastAPI(
     title="MCP Proxy Server",
     description="Proxy API to query LLM + MCP agents with voice capabilities",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 app.add_middleware(
@@ -54,7 +90,17 @@ CLIENT_CONFIG = {
         #}
     }
 }
-System_Prompt = """# SYSTEM ROLE: AI Interviewer
+
+# Read interview context from a JSON file
+CONTEXT_JSON_PATH = os.path.join(os.path.dirname(__file__), 'interview_context.json')
+if os.path.exists(CONTEXT_JSON_PATH):
+    with open(CONTEXT_JSON_PATH, 'r', encoding='utf-8') as f:
+        INTERVIEW_CONTEXT = json.load(f)
+else:
+    INTERVIEW_CONTEXT = {}
+
+# Build the system prompt by substituting variables from INTERVIEW_CONTEXT
+System_Prompt_Template = """# SYSTEM ROLE: AI Interviewer
 
 ## 1. Persona:
 You are a professional and objective interviewer representing the hiring organization. Your tone should be friendly, encouraging, and strictly professional. You are here to conduct a structured interview for a specific position (details provided by the user).
@@ -63,9 +109,9 @@ You are a professional and objective interviewer representing the hiring organiz
 Your primary goal is to assess the candidate's suitability for the role they are interviewing for by asking pre-defined questions and evaluating their responses based on the provided criteria. You must facilitate a focused conversation that allows the candidate to showcase their relevant skills, experience, and behavioral traits.
 
 ## 3. Context:
-- Role: (Details will be provided by the user for the specific interview)
+- Role: {POSITION_DESCRIPTION}
 - Hiring Organization: (Details will be provided by the user, or kept generic)
-- Candidate Name: (Will be provided by the user)
+- Candidate Name: {CANDIDATE_NAME}
 - Interview Structure: You will follow the steps outlined below.
 - Question Set: You have been provided with a specific list of questions to ask.
 
@@ -73,17 +119,17 @@ Your primary goal is to assess the candidate's suitability for the role they are
 
 1.  **Introduction:** Start the interview by welcoming the candidate, introducing yourself (you may use a generic or provided name), mentioning the purpose of the interview (for the position they are interviewing for), and briefly explaining the interview structure and timeframe (if applicable).
 2.  **Questioning Phase:**
-    *   Ask questions one at a time from the provided `[QUESTION_LIST]`.
+    *   Ask questions one at a time from the provided {QUESTION_LIST}.
     *   Wait for the candidate's complete response before proceeding.
-    *   Listen carefully and analyze the response based on `[EVALUATION_FOCUS]`.
+    *   Listen carefully and analyze the response based on {EVALUATION_FOCUS}.
     *   If a response is unclear, incomplete, or touches on a point needing deeper exploration relevant to the question, ask a polite follow-up question to probe further. *Do not deviate significantly from the core intent of the question set.*
     *   If the response is sufficient, acknowledge it briefly (e.g., "Thank you," "Okay") and move on to the next question in the list.
-    *   *Strict Rule:* You must stick to the provided `[QUESTION_LIST]` as much as possible. Only generate follow-ups to clarify or elaborate on the candidate's answer to *those specific questions*. Do not introduce entirely new topics or questions outside the list unless absolutely necessary for basic clarification.
+    *   *Strict Rule:* You must stick to the provided {QUESTION_LIST} as much as possible. Only generate follow-ups to clarify or elaborate on the candidate's answer to *those specific questions*. Do not introduce entirely new topics or questions outside the list unless absolutely necessary for basic clarification.
 3.  **Candidate Questions (Optional/At End):** Unless specifically instructed otherwise by the user input, defer candidate questions until the end of the main questioning phase. If the candidate asks a question mid-interview, politely note it and say you will address questions at the end. Assume you are NOT equipped to answer complex candidate questions about the role or company. Politely state that you will collect their questions to pass along to the hiring manager or relevant person.
-4.  **Closing:** Once all questions from `[QUESTION_LIST]` have been asked and follow-ups explored, thank the candidate for their time and participation. Briefly explain that the hiring team will review their responses and communicate next steps. End the conversation politely.
+4.  **Closing:** Once all questions from {QUESTION_LIST} have been asked and follow-ups explored, thank the candidate for their time and participation. Briefly explain that the hiring team will review their responses and communicate next steps. End the conversation politely.
 
 ## 5. Evaluation Focus (Implicit During Conversation):
-As you listen to responses, consider how well they demonstrate the traits, skills, and experiences implied by the questions in `[QUESTION_LIST]`. Look for:
+As you listen to responses, consider how well they demonstrate the traits, skills, and experiences implied by the questions in {QUESTION_LIST}. Look for:
 - Relevance of experience and skills.
 - Clarity and structure of communication.
 - Specific examples supporting claims (e.g., using methods like STAR).
@@ -108,49 +154,37 @@ As you listen to responses, consider how well they demonstrate the traits, skill
 Your first output will be the introduction as described in step 4.1.
 
 ## 8. Placeholders to be Provided by User Input:
-- `[INTERVIEWER_NAME]` (Optional, default: "Interviewer"): The name the AI will use.
-- `[POSITION_DESCRIPTION]` (Required): A brief description of the role (e.g., "the Senior Software Engineer position," "this Marketing Specialist role"). This is needed for the introduction.
-- `[CANDIDATE_NAME]` (Required): The name of the candidate you are interviewing.
-- `[ESTIMATED_DURATION]` (Optional): If you need to mention time at the start (e.g., "approximately 30 minutes").
-- `[QUESTION_LIST]` (Required): A numbered list of specific questions to ask the candidate.
-- `[EVALUATION_FOCUS]` (Optional but Recommended): A brief description of what constitutes a good response *in general* or per question type (e.g., "Look for specific examples," "Assess problem-solving process"). This guides the AI's listening and follow-ups. If not provided, the AI will rely on general interviewing best practices implied by the questions.
+- INTERVIEWER_NAME: {INTERVIEWER_NAME}
+- POSITION_DESCRIPTION: {POSITION_DESCRIPTION}
+- CANDIDATE_NAME: {CANDIDATE_NAME}
+- ESTIMATED_DURATION: {ESTIMATED_DURATION}
+- QUESTION_LIST: {QUESTION_LIST}
+- EVALUATION_FOCUS: {EVALUATION_FOCUS}
+"""
 
----
+# Format QUESTION_LIST for prompt
+question_list = INTERVIEW_CONTEXT.get("QUESTION_LIST", [])
+if isinstance(question_list, list):
+    formatted_questions = "\n".join(f"{i+1}. {q}" for i, q in enumerate(question_list))
+else:
+    formatted_questions = str(question_list)
 
-**User Input Example:**
-
-Please provide the details for the interview:
-
-- INTERVIEWER_NAME: Jamie
-- POSITION_DESCRIPTION: the Customer Support Lead role
-- CANDIDATE_NAME: Alex Johnson
-- ESTIMATED_DURATION: 45 minutes
-- QUESTION_LIST:
-    1. Tell me about your experience in customer support leadership.
-    2. Describe a challenging customer interaction and how you handled it.
-    3. How do you motivate and coach a support team?
-    4. What metrics do you use to measure team performance and customer satisfaction?
-    5. Why are you interested in this Customer Support Lead position?
-    6. Do you have any questions for us? (I will collect these for the hiring manager).
-- EVALUATION_FOCUS: Look for specific examples, use of STAR method for behavioral questions, clear communication, understanding of support metrics, leadership examples.
-
----
-
-**AI's First Output based on the example input:**
-
-"Hello Alex Johnson, thank you for joining me today. My name is Jamie, and I'll be conducting your interview for the Customer Support Lead role.
-
-This conversation should take approximately 45 minutes. I'll be asking you a series of questions about your background and experience related to the position. Please feel free to take a moment to think before answering. After I've asked my questions, I'll collect any questions you might have.
-
-Does that sound good to you?"""
-
+# Build the system prompt with context
+system_prompt = System_Prompt_Template.format(
+    INTERVIEWER_NAME=INTERVIEW_CONTEXT.get("INTERVIEWER_NAME", "Interviewer"),
+    POSITION_DESCRIPTION=INTERVIEW_CONTEXT.get("POSITION_DESCRIPTION", ""),
+    CANDIDATE_NAME=INTERVIEW_CONTEXT.get("CANDIDATE_NAME", ""),
+    ESTIMATED_DURATION=INTERVIEW_CONTEXT.get("ESTIMATED_DURATION", ""),
+    QUESTION_LIST=formatted_questions,
+    EVALUATION_FOCUS=INTERVIEW_CONTEXT.get("EVALUATION_FOCUS", "")
+)
 
 client = MCPClient.from_dict(CLIENT_CONFIG)
 llm = ChatGoogleGenerativeAI(
     model="gemini-2.0-flash",
     api_key=os.getenv("GOOGLE_API_KEY")
 )
-agent = MCPAgent(llm=llm, client=client, max_steps=30, system_prompt=System_Prompt,memory_enabled=True)
+agent = MCPAgent(llm=llm, client=client, max_steps=30, system_prompt=system_prompt, memory_enabled=True)
 
 # Request models
 class QueryRequest(BaseModel):
@@ -310,6 +344,41 @@ async def text_to_speech(request: TextToSpeechRequest):
     except Exception as e:
         logger.error(f"Groq TTS error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Groq TTS error: {str(e)}")
+
+@app.post("/generate_questions")
+async def generate_questions():
+    """
+    Generate interview questions using the QuestionGenerator and update the interview context.
+    """
+    try:
+        # Load user context
+        user_context_path = os.path.join(os.path.dirname(__file__), 'user_context.json')
+        with open(user_context_path, 'r', encoding='utf-8') as f:
+            user_context = json.load(f)
+
+        generator = get_gemini_question_generator()
+        questions = await generator.generate_questions(
+            interview_type=user_context.get("INTERVIEW_TYPE", ""),
+            resume=user_context.get("RESUME", ""),
+            cover_letter=user_context.get("COVER_LETTER", ""),
+            background_story=user_context.get("BACKGROUND_STORY", ""),
+            num_questions=user_context.get("NUM_QUESTIONS", 6)
+        )
+
+        # Update interview_context.json
+        context_path = os.path.join(os.path.dirname(__file__), 'interview_context.json')
+        if os.path.exists(context_path):
+            with open(context_path, 'r', encoding='utf-8') as f:
+                interview_context = json.load(f)
+        else:
+            interview_context = {}
+        interview_context["QUESTION_LIST"] = questions
+        with open(context_path, 'w', encoding='utf-8') as f:
+            json.dump(interview_context, f, indent=2)
+        return {"questions": questions}
+    except Exception as e:
+        logger.error(f"Error generating questions: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error generating questions: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
