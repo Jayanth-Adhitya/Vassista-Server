@@ -252,98 +252,60 @@ async def transcribe_audio(audio: UploadFile = File(...)):
 @app.post("/speak")
 async def text_to_speech(request: TextToSpeechRequest):
     """
-    Stream text-to-speech audio from Groq's TTS API to the client as Opus in WebM container, using low-latency ffmpeg flags.
+    Convert text to speech using Groq's TTS API
     """
-    import subprocess
-    import threading
     try:
-        logger.info("Processing text-to-speech request using Groq TTS (Opus/WebM streaming, low-latency)")
+        logger.info("Processing text-to-speech request using Groq TTS")
+        
+        # Get Groq API key from environment variables
         groq_api_key = os.getenv("GROQ_API_KEY")
         if not groq_api_key:
             logger.error("GROQ_API_KEY not found in environment variables")
             raise HTTPException(status_code=500, detail="GROQ_API_KEY not found in environment variables")
-
+        
+        # Set up the headers for the Groq API request
         headers = {
             "Authorization": f"Bearer {groq_api_key}",
             "Content-Type": "application/json"
         }
+        
+        # Prepare the request payload
         data = {
             "model": "playai-tts",
             "voice": request.voice,
             "input": request.text,
             "response_format": "wav"
         }
-
-        # Stream the response from Groq (WAV audio)
-        groq_response = requests.post(
+        
+        # Make the request to Groq TTS API
+        logger.info(f"Sending TTS request to Groq API with voice: {request.voice}")
+        response = requests.post(
             "https://api.groq.com/openai/v1/audio/speech",
             headers=headers,
-            json=data,
-            stream=True
+            json=data
         )
-
-        if groq_response.status_code != 200:
-            logger.error(f"Groq TTS API error: {groq_response.text}")
+        
+        # Check if the request was successful
+        if response.status_code != 200:
+            logger.error(f"Groq TTS API error: {response.text}")
             raise HTTPException(
-                status_code=groq_response.status_code,
-                detail=f"Groq TTS API error: {groq_response.text}"
+                status_code=response.status_code,
+                detail=f"Groq TTS API error: {response.text}"
             )
+        
+        # Get the audio content
+        audio_content = io.BytesIO(response.content)
+        audio_content.seek(0)
 
-        ffmpeg_cmd = [
-            "ffmpeg",
-            "-hide_banner", "-loglevel", "error",
-            "-i", "pipe:0",
-            "-c:a", "libopus",
-            "-b:a", "64k",
-            "-f", "webm",
-            "-flush_packets", "1",
-            "-fflags", "+nobuffer",
-            "pipe:1"
-        ]
-        try:
-            ffmpeg_proc = subprocess.Popen(
-                ffmpeg_cmd,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                bufsize=0
-            )
-        except Exception as e:
-            logger.error(f"Failed to start ffmpeg: {e}")
-            raise HTTPException(status_code=500, detail="Failed to start ffmpeg for audio transcoding.")
-
-        def feed_ffmpeg():
-            try:
-                for chunk in groq_response.iter_content(chunk_size=4096):
-                    if chunk:
-                        ffmpeg_proc.stdin.write(chunk)
-                ffmpeg_proc.stdin.close()
-            except Exception as e:
-                logger.error(f"Error piping WAV to ffmpeg: {e}")
-                try:
-                    ffmpeg_proc.stdin.close()
-                except Exception:
-                    pass
-
-        threading.Thread(target=feed_ffmpeg, daemon=True).start()
-
-        def stream_webm():
-            try:
-                while True:
-                    data = ffmpeg_proc.stdout.read(4096)
-                    if not data:
-                        break
-                    yield data
-            finally:
-                try:
-                    ffmpeg_proc.stdout.close()
-                except Exception:
-                    pass
-                ffmpeg_proc.wait()
-
+        logger.info("Text-to-speech conversion completed successfully with Groq TTS")
+        
+        # Return the audio as a streaming response
         return StreamingResponse(
-            stream_webm(),
-            media_type="audio/webm",
-            headers={"Content-Disposition": "inline; filename=speech.webm"}
+            audio_content,
+            media_type="audio/wav",
+            headers={
+                "Content-Disposition": "attachment; filename=speech.wav"
+            }
         )
     except Exception as e:
         logger.error(f"Groq TTS error: {str(e)}", exc_info=True)
