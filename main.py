@@ -218,21 +218,35 @@ async def handle_query(req: QueryRequest):
 @app.post("/transcribe", response_model=TranscriptionResponse)
 async def transcribe_audio(audio: UploadFile = File(...)):
     """
-    Transcribe audio using Groq API
+    Transcribe audio using Groq API - FIXED VERSION
     """
     try:
-        logger.info("Processing audio transcription request")
+        logger.info(f"Processing audio transcription request - File: {audio.filename}, Content-Type: {audio.content_type}")
+        
+        # Validate the uploaded file
+        if not audio.filename:
+            raise HTTPException(status_code=400, detail="No audio file provided")
+        
+        # Read the file content
+        audio_content = await audio.read()
+        logger.info(f"Audio file size: {len(audio_content)} bytes")
+        
+        if len(audio_content) == 0:
+            raise HTTPException(status_code=400, detail="Audio file is empty")
+        
         # Create a temporary file to save the uploaded audio
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_audio:
-            # Write the uploaded audio to the temporary file
-            content = await audio.read()
-            temp_audio.write(content)
+            temp_audio.write(audio_content)
             temp_audio_path = temp_audio.name
+        
+        logger.info(f"Saved audio to temporary file: {temp_audio_path}")
 
         # Get Groq API key from environment variables
         groq_api_key = os.getenv("GROQ_API_KEY")
         if not groq_api_key:
             logger.error("GROQ_API_KEY not found in environment variables")
+            # Clean up temp file
+            os.unlink(temp_audio_path)
             raise HTTPException(status_code=500, detail="GROQ_API_KEY not found in environment variables")
 
         # Set up the headers for the Groq API request
@@ -240,45 +254,57 @@ async def transcribe_audio(audio: UploadFile = File(...)):
             "Authorization": f"Bearer {groq_api_key}"
         }
 
-        # Prepare the form data for the Groq API request
-        with open(temp_audio_path, "rb") as audio_file:
-            files = {
-                "file": (os.path.basename(temp_audio_path), audio_file, "audio/wav")
-            }
+        try:
+            # Prepare the form data for the Groq API request
+            with open(temp_audio_path, "rb") as audio_file:
+                files = {
+                    "file": (audio.filename or "recording.wav", audio_file, "audio/wav")
+                }
+                
+                data = {
+                    "model": "whisper-large-v3-turbo",
+                    "response_format": "json",
+                    "language": "en",
+                    "temperature": 0.0
+                }
+                
+                # Make the request to Groq API
+                logger.info("Sending request to Groq API")
+                response = requests.post(
+                    "https://api.groq.com/openai/v1/audio/transcriptions",
+                    headers=headers,
+                    files=files,
+                    data=data,
+                    timeout=30  # Add timeout
+                )
             
-            data = {
-                "model": "whisper-large-v3-turbo",
-                "response_format": "json",
-                "language": "en",
-                "temperature": 0.0
-            }
+            # Clean up the temporary file
+            os.unlink(temp_audio_path)
             
-            # Make the request to Groq API
-            logger.info("Sending request to Groq API")
-            response = requests.post(
-                "https://api.groq.com/openai/v1/audio/transcriptions",
-                headers=headers,
-                files=files,
-                data=data
-            )
+            # Check if the request was successful
+            if response.status_code != 200:
+                logger.error(f"Groq API error: Status {response.status_code}, Response: {response.text}")
+                raise HTTPException(
+                    status_code=response.status_code, 
+                    detail=f"Groq API error: {response.text}"
+                )
+            
+            # Parse the response
+            result = response.json()
+            transcribed_text = result.get("text", "").strip()
+            logger.info(f"Transcription completed successfully: '{transcribed_text[:100]}...'")
+            
+            return {"text": transcribed_text}
         
-        # Clean up the temporary file
-        os.unlink(temp_audio_path)
-        
-        # Check if the request was successful
-        if response.status_code != 200:
-            logger.error(f"Groq API error: {response.text}")
-            raise HTTPException(
-                status_code=response.status_code, 
-                detail=f"Groq API error: {response.text}"
-            )
-        
-        # Parse the response
-        result = response.json()
-        transcribed_text = result.get("text", "").strip()
-        logger.info("Transcription completed successfully")
-        
-        return {"text": transcribed_text}
+        except requests.exceptions.RequestException as e:
+            # Clean up temp file in case of request error
+            if os.path.exists(temp_audio_path):
+                os.unlink(temp_audio_path)
+            logger.error(f"Request error: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Request error: {str(e)}")
+            
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Transcription error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Transcription error: {str(e)}")
