@@ -27,10 +27,5 @@ COPY . .
 # Expose port 8000
 EXPOSE 8000
 
-# Set environment variables
-ENV GOOGLE_API_KEY="AIzaSyA9rsKvAwQ3JP9WCr0ZW_fE3q832-B4I8s"
-ENV GROQ_API_KEY="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"
-ENV CLICKUP_API_TOKEN="pk_96732703_BMQ18G3SJ5N7TGYFFKAVDXXS0LP6QT1I"
-
 # Run main.py using uvicorn
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
