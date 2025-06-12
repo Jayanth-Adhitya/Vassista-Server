@@ -212,7 +212,7 @@ async def handle_query(req: QueryRequest):
     try:
         logger.info(f"Received query: {req.query}")
         # Use the same approach as your working code
-        result = await agent.run(req.query)
+        result = await agent.run(req.query,server_name="agent-zero")
         logger.info(f"Query processed successfully")
         return {"result": result}
     except Exception as e:
