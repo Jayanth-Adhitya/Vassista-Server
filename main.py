@@ -74,21 +74,12 @@ app.add_middleware(
 
 # Configuration for MCP servers 
 CLIENT_CONFIG = {
-    "mcpServers": {
-        "clickup": {
-            "command": "npx",
-            "args": ["-y", "clickup-mcp-server"],
-            "env": {
-                "CLICKUP_API_TOKEN": os.getenv("CLICKUP_API_TOKEN")
-            },
-            "disabled": False,
-            "autoApprove": []
-        },
-        #"gmail": {
-        #    "command": "npx",
-        #    "args": ["@gongrzhe/server-gmail-autoauth-mcp"]
-        #}
+  "mcpServers": {
+    "agent-zero": {
+      "type": "sse",
+      "serverUrl": "https://ao.uptopoint.net/mcp/t-0/sse"
     }
+  }
 }
 
 # Read interview context from a JSON file
