@@ -189,7 +189,6 @@ async def check_servers():
     servers = await client.list_servers()
     print("Connected MCP servers:", servers)
 
-asyncio.run(check_servers())
 
 # Request models
 class QueryRequest(BaseModel):
@@ -414,4 +413,6 @@ async def generate_questions():
 if __name__ == "__main__":
     import uvicorn
     print("Starting MCP Proxy Server...")
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)  # Disable reload to avoid multiple server instances
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False) 
+    # Disable reload to avoid multiple server instances
+    asyncio.run(check_servers())
