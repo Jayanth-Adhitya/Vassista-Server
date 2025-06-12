@@ -185,6 +185,12 @@ llm = ChatGoogleGenerativeAI(
 )
 agent = MCPAgent(llm=llm, client=client, max_steps=30, system_prompt=system_prompt, memory_enabled=True)
 
+async def check_servers():
+    servers = await client.list_servers()
+    print("Connected MCP servers:", servers)
+
+asyncio.run(check_servers())
+
 # Request models
 class QueryRequest(BaseModel):
     query: str
