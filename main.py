@@ -183,7 +183,7 @@ llm = ChatGoogleGenerativeAI(
     model="gemini-2.0-flash",
     api_key=os.getenv("GOOGLE_API_KEY")
 )
-agent = MCPAgent(llm=llm, client=client, max_steps=30, system_prompt=system_prompt, memory_enabled=True)
+agent = MCPAgent(llm=llm, client=client, max_steps=30, system_prompt=system_prompt, memory_enabled=True, verbose=True)
 
 async def check_servers():
     servers = await client.list_servers()
@@ -212,7 +212,7 @@ async def handle_query(req: QueryRequest):
     try:
         logger.info(f"Received query: {req.query}")
         # Use the same approach as your working code
-        result = await agent.run(req.query,server_name="agent-zero")
+        result = await agent.run(req.query)
         logger.info(f"Query processed successfully")
         return {"result": result}
     except Exception as e:
