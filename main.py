@@ -75,12 +75,6 @@ app.add_middleware(
 # Configuration for MCP servers 
 CLIENT_CONFIG = {
   "mcpServers": {
-    "clickup": {
-      "type": "stdio",  # same as local
-      "command": "npx",
-      "args": ["-y", "clickup-mcp-server"],
-      "env": {"CLICKUP_API_TOKEN": os.getenv("CLICKUP_API_TOKEN")}
-    },
     "agent-zero": {
       "type": "sse",
       "url": "https://ao.uptopoint.net/mcp/t-0/sse",
