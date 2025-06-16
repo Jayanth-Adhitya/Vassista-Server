@@ -149,15 +149,21 @@ app.add_middleware(
 # Configuration for MCP servers 
 
 CLIENT_CONFIG = {
-    "mcpServers": {
+  "mcpServers": {
+    "clickup": {
+      "type": "stdio",  # same as local
+      "command": "npx",
+      "args": ["-y", "clickup-mcp-server"],
+      "env": {"CLICKUP_API_TOKEN": os.getenv("CLICKUP_API_TOKEN")}
+    },
     "agent-zero": {
       "type": "sse",
-      "serverUrl": "https://ao.uptopoint.net/mcp/t-0/sse"
+      "url": "https://ao.uptopoint.net/mcp/t-0/sse",
+      # optionally:
+      # "authorization_token": os.getenv("AGENT_ZERO_TOKEN")
     }
   }
-
 }
-
 
 
 # Read interview context from a JSON file
