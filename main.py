@@ -794,6 +794,61 @@ async def generate_questions():
 
         raise HTTPException(status_code=500, detail=f"Error generating questions: {str(e)}")
 
+# Add this to your main.py file
+
+@app.post("/test-agent-zero")
+async def test_agent_zero(req: QueryRequest):
+    """
+    Test endpoint with minimal prompt to allow agent-zero usage
+    """
+    try:
+        logger.info(f"Testing agent-zero with query: {req.query}")
+        
+        # Create a minimal system prompt that allows tool usage
+        test_prompt = """You are a helpful AI assistant with access to various tools and systems. 
+        You can use any available tools to help answer questions and complete tasks. 
+        Be thorough and use the tools at your disposal when appropriate."""
+        
+        # Create a temporary agent with minimal prompt
+        test_llm = ChatGoogleGenerativeAI(
+            model="gemini-2.0-flash",
+            api_key=os.getenv("GOOGLE_API_KEY")
+        )
+        
+        test_agent = MCPAgent(
+            llm=test_llm, 
+            client=client, 
+            max_steps=30, 
+            system_prompt=test_prompt,
+            memory_enabled=False  # Disable memory for testing
+        )
+        
+        result = await test_agent.run(req.query)
+        logger.info(f"Agent-zero test completed successfully")
+        return {"result": result, "test_mode": True}
+        
+    except Exception as e:
+        logger.error(f"Error testing agent-zero: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/list-mcp-tools")
+async def list_mcp_tools():
+    """
+    List all available MCP tools to see what agent-zero provides
+    """
+    try:
+        tools = await client.list_tools()
+        resources = await client.list_resources()
+        
+        return {
+            "tools": tools,
+            "resources": resources,
+            "servers": list(CLIENT_CONFIG["mcpServers"].keys())
+        }
+    except Exception as e:
+        logger.error(f"Error listing MCP tools: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 if __name__ == "__main__":
