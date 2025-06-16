@@ -377,6 +377,8 @@ system_prompt = System_Prompt_Template.format(
 
 )
 
+system_prompt = Tool_Usage_Addition + system_prompt
+
 
 
 client = MCPClient.from_dict(CLIENT_CONFIG)
