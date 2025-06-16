@@ -25,6 +25,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from fastapi.middleware.cors import CORSMiddleware
 
 from mcp_use import MCPAgent, MCPClient
+import mcp_use
 
 from QuestionGenerator import get_gemini_question_generator
 
@@ -43,7 +44,7 @@ logger = logging.getLogger(__name__)
 
 
 # Load environment variables
-
+mcp_use.set_debug(2)
 load_dotenv()
 
 
