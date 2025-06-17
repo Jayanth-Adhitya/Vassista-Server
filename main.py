@@ -159,7 +159,7 @@ CLIENT_CONFIG = {
     },
     "agent-zero": {
       "type": "sse",
-      "url": "https://ao.uptopoint.net/mcp/t-0/sse",
+      "url": "http://ao.uptopoint.net:7192/mcp/t-jaGTNm4VVMCLKHDF/sse",
       # optionally:
       # "authorization_token": os.getenv("AGENT_ZERO_TOKEN")
     }
