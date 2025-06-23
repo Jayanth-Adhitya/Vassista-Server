@@ -329,31 +329,19 @@ class TranscriptionResponse(BaseModel):
 
 
 @app.post("/query", response_model=QueryResponse)
-
 async def handle_query(req: QueryRequest):
-
     """
-
     Handle incoming query, run through MCPAgent, and return result.
-
     """
-
     try:
-
         logger.info(f"Received query: {req.query}")
-
         # Use the same approach as your working code
-
         result = await agent.run(req.query)
-
         logger.info(f"Query processed successfully")
-
-        return {"result": result}
-
+        # Add notification field to response
+        return {"result": result, "notification": "Response is ready"}
     except Exception as e:
-
         logger.error(f"Error processing query: {str(e)}", exc_info=True)
-
         raise HTTPException(status_code=500, detail=str(e))
 
 
