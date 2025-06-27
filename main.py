@@ -77,19 +77,18 @@ app.add_middleware(
 # Configuration for MCP servers 
 CLIENT_CONFIG = {
     "mcpServers": {
-        "clickup": {
-            "command": "npx",
-            "args": ["-y", "clickup-mcp-server"],
-            "env": {
-                "CLICKUP_API_TOKEN": os.getenv("CLICKUP_API_TOKEN")
-            },
-            "disabled": False,
-            "autoApprove": []
-        },
-        #"gmail": {
-        #    "command": "npx",
-        #    "args": ["@gongrzhe/server-gmail-autoauth-mcp"]
-        #}
+    "clickup": {
+      "type": "stdio",  # same as local
+      "command": "npx",
+      "args": ["-y", "clickup-mcp-server"],
+      "env": {"CLICKUP_API_TOKEN": os.getenv("CLICKUP_API_TOKEN")}
+    },
+    "agent-zero": {
+      "type": "sse",
+      "url": "http://ao.uptopoint.net:7192/mcp/t-jaGTNm4VVMCLKHDF/sse",
+      # optionally:
+      # "authorization_token": os.getenv("AGENT_ZERO_TOKEN")
+    }
     }
 }
 
