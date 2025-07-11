@@ -102,7 +102,7 @@ async def submit_query(req: QueryRequest, background_tasks: BackgroundTasks):
     """
     task_id = str(uuid.uuid4())
     try:
-        coro = agent.run(req.query)
+        coro = agent.run(req.query,server_name="agent-zero")
         result = await asyncio.wait_for(asyncio.shield(coro), timeout=0.01)
         query_tasks[task_id] = {"status": "completed", "result": result}
         return {"task_id": task_id, "status": "completed", "result": result}
