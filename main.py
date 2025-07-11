@@ -87,7 +87,8 @@ async def submit_query(req: QueryRequest, background_tasks: BackgroundTasks):
     task_id = str(uuid.uuid4())
     try:
         await client.create_session("agent-zero")
-        coro = agent.run(req.query)
+        query_str = "Use agent zero to " + req.query
+        coro = agent.run(query_str)
         result = await asyncio.wait_for(asyncio.shield(coro), timeout=0.01)
         query_tasks[task_id] = {"status": "completed", "result": result}
         return {"task_id": task_id, "status": "completed", "result": result}
@@ -95,7 +96,7 @@ async def submit_query(req: QueryRequest, background_tasks: BackgroundTasks):
         query_tasks[task_id] = {"status": "running", "result": None}
         async def run_task():
             try:
-                result = await agent.run(req.query)
+                result = await agent.run("Use agent zero to " + req.query)
                 query_tasks[task_id] = {"status": "completed", "result": result}
             except Exception as e:
                 query_tasks[task_id] = {"status": "error", "result": str(e)}
