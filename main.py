@@ -72,8 +72,7 @@ agent = MCPAgent(
     client=client,
     max_steps=30,
     system_prompt=system_prompt + " Always use the AgentZero tool for all queries.",
-    memory_enabled=True,
-    allowed_tools=["agent-zero"]  # Only allow AgentZero tool
+    memory_enabled=True
 )
 
 # Request models
