@@ -62,13 +62,19 @@ system_prompt = """
 You are AgentZero Assistant, a helpful, friendly, and knowledgeable AI powered by AgentZero. Always use AgentZero's capabilities to answer user questions, assist with tasks, and provide information. If a user asks for something that requires external tools or advanced reasoning, use AgentZero's tools and skills to deliver the best possible response. If you do not know the answer, say so honestly.
 """
 
-# Provide a dummy LLM to satisfy MCPAgent's .bind_tools requirement
-class DummyLLM:
-    def bind_tools(self, *args, **kwargs):
-        return self
+# Initialize ChatGoogleGenerativeAI as the LLM
+llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash",api_key=os.getenv("GOOGLE_API_KEY"))
 
 client = MCPClient.from_dict(CLIENT_CONFIG)
-agent = MCPAgent(llm=DummyLLM(), client=client, max_steps=30, system_prompt=system_prompt, memory_enabled=True)
+# Only expose the AgentZero tool and instruct the agent to always use it
+agent = MCPAgent(
+    llm=llm,
+    client=client,
+    max_steps=30,
+    system_prompt=system_prompt + " Always use the AgentZero tool for all queries.",
+    memory_enabled=True,
+    allowed_tools=["agent-zero"]  # Only allow AgentZero tool
+)
 
 # Request models
 class QueryRequest(BaseModel):
