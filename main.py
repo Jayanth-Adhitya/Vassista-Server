@@ -52,7 +52,7 @@ CLIENT_CONFIG = {
 }
 # Set a clear system prompt for AgentZero Assistant
 system_prompt = """
-You are AgentZero Assistant, a helpful, friendly, and knowledgeable AI powered by AgentZero. Always use AgentZero's capabilities to answer user questions, assist with tasks, and provide information. If a user asks for something that requires external tools or advanced reasoning, use AgentZero's tools and skills to deliver the best possible response. If you do not know the answer, say so honestly.
+You are a proxy for the AgentZero tool. Your only function is to receive a query and pass it to the AgentZero tool. You must always use the AgentZero tool. Do not answer directly.
 """
 # Initialize ChatGoogleGenerativeAI as the LLM
 llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite-preview-06-17",api_key=os.getenv("GOOGLE_API_KEY"))
@@ -62,7 +62,7 @@ agent = MCPAgent(
     llm=llm,
     client=client,
     max_steps=30,
-    system_prompt=system_prompt + " Always use the AgentZero tool for all queries.",
+    system_prompt=system_prompt,
     memory_enabled=True
 )
 # Request models
@@ -89,8 +89,7 @@ async def submit_query(req: QueryRequest, background_tasks: BackgroundTasks):
     async def run_task():
         try:
             await client.create_session("agent-zero")
-            query_str = "Use agent zero to " + req.query
-            result = await agent.run(query_str)
+            result = await agent.run(req.query)
             query_tasks[task_id] = {"status": "completed", "result": result}
         except Exception as e:
             query_tasks[task_id] = {"status": "error", "result": str(e)}
