@@ -61,7 +61,7 @@ client = MCPClient.from_dict(CLIENT_CONFIG)
 agent = MCPAgent(
     llm=llm,
     client=client,
-    max_steps=30,
+    max_steps=50,
     system_prompt=system_prompt,
     memory_enabled=True
 )
