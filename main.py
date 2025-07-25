@@ -120,9 +120,8 @@ async def submit_query(req: QueryRequest, background_tasks: BackgroundTasks):
             agent_response.raise_for_status()
             
             agent_result_json = agent_response.json()
-            # Assuming the actual response text is under a key like 'text' or 'message'
-            # Adjust this based on the actual AgentZero response structure
-            result_text = agent_result_json.get("text", str(agent_result_json)) 
+            # Extract only the 'message' content from the AgentZero response
+            result_text = agent_result_json.get("message", str(agent_result_json)) 
             query_tasks[task_id] = {"status": "completed", "result": result_text}
         except Exception as e:
             query_tasks[task_id] = {"status": "error", "result": str(e)}
