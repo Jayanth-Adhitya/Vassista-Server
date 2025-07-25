@@ -9,9 +9,7 @@ from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
-from langchain_google_genai import ChatGoogleGenerativeAI
 from fastapi.middleware.cors import CORSMiddleware
-from mcp_use import MCPAgent, MCPClient
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 import uuid
@@ -26,9 +24,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield
 # Initialize FastAPI
 app = FastAPI(
-    title="MCP Proxy Server",
-    description="Proxy API to query LLM + MCP agents with voice capabilities",
-    version="1.0.0",
+    title="AgentZero Proxy Server",
+    description="Proxy API to query AgentZero directly with voice capabilities",
+    version="1.1.0",
     lifespan=lifespan
 )
 app.add_middleware(
@@ -40,31 +38,8 @@ app.add_middleware(
     # Allow standard headers
     allow_headers=["*"],
 )
-# Configuration for MCP servers 
-CLIENT_CONFIG = {
-    "mcpServers": {
-        "agent-zero": {
-            "type": "sse",
-            "url": "http://aotest.uptopoint.net:7777/mcp/t-jaGTNm4VVMCLKHDF/sse",
-            # "authorization_token": os.getenv("AGENT_ZERO_TOKEN")
-        }
-    }
-}
-# Set a clear system prompt for AgentZero Assistant
-system_prompt = """
-You are a proxy for the AgentZero tool. Your only function is to receive a query and pass it to the AgentZero tool. You must always use the AgentZero tool. Do not answer directly.
-"""
-# Initialize ChatGoogleGenerativeAI as the LLM
-llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite-preview-06-17",api_key=os.getenv("GOOGLE_API_KEY"))
-client = MCPClient.from_dict(CLIENT_CONFIG)
-# Only expose the AgentZero tool and instruct the agent to always use it
-agent = MCPAgent(
-    llm=llm,
-    client=client,
-    max_steps=50,
-    system_prompt=system_prompt,
-    memory_enabled=True
-)
+# AgentZero configuration
+AGENT_ZERO_URL = "https://aotest.uptopoint.net"
 # Request models
 class QueryRequest(BaseModel):
     query: str
@@ -88,8 +63,37 @@ async def submit_query(req: QueryRequest, background_tasks: BackgroundTasks):
     query_tasks[task_id] = {"status": "running", "result": None}
     async def run_task():
         try:
-            await client.create_session("agent-zero")
-            result = await agent.run(req.query)
+            # Fetch CSRF token and cookies
+            csrf_url = f"{AGENT_ZERO_URL}/csrf_token"
+            csrf_response = requests.get(csrf_url, verify=False) # verify=False for self-signed certs if any
+            csrf_response.raise_for_status()
+            
+            csrf_json = csrf_response.json()
+            
+            csrf_token = csrf_json.get("token") # Corrected key from "csrf_token" to "token"
+            cookies = csrf_response.cookies
+            
+            if not csrf_token:
+                raise ValueError(f"CSRF token not found in response. Full response: {csrf_json}")
+
+            # Send message to AgentZero
+            message_url = f"{AGENT_ZERO_URL}/message"
+            headers = {
+                "X-CSRF-Token": csrf_token,
+                "Content-Type": "application/json"
+            }
+            payload = {"text": req.query}
+            
+            agent_response = requests.post(
+                message_url, 
+                headers=headers, 
+                cookies=cookies, 
+                json=payload, 
+                verify=False # verify=False for self-signed certs if any
+            )
+            agent_response.raise_for_status()
+            
+            result = agent_response.json()
             query_tasks[task_id] = {"status": "completed", "result": result}
         except Exception as e:
             query_tasks[task_id] = {"status": "error", "result": str(e)}
