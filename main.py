@@ -9,7 +9,9 @@ from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
+from langchain_google_genai import ChatGoogleGenerativeAI
 from fastapi.middleware.cors import CORSMiddleware
+from mcp_use import MCPAgent, MCPClient
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 import uuid
@@ -24,9 +26,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield
 # Initialize FastAPI
 app = FastAPI(
-    title="AgentZero Proxy Server",
-    description="Proxy API to query AgentZero directly with voice capabilities",
-    version="1.1.0",
+    title="MCP Proxy Server",
+    description="Proxy API to query LLM + MCP agents with voice capabilities",
+    version="1.0.0",
     lifespan=lifespan
 )
 app.add_middleware(
@@ -35,10 +37,34 @@ app.add_middleware(
     allow_origins=["*"],
     # Allow all types of request methods (GET, POST, etc.)
     allow_methods=["*"],
-    # Allow standard headers
     allow_headers=["*"],
 )
-# AgentZero configuration
+# Configuration for MCP servers 
+CLIENT_CONFIG = {
+    "mcpServers": {
+        "agent-zero": {
+            "type": "sse",
+            "url": "http://aotest.uptopoint.net:7777/mcp/t-jaGTNm4VVMCLKHDF/sse",
+            # "authorization_token": os.getenv("AGENT_ZERO_TOKEN")
+        }
+    }
+}
+# Set a clear system prompt for AgentZero Assistant
+system_prompt = """
+You are a proxy for the AgentZero tool. Your only function is to receive a query and pass it to the AgentZero tool. You must always use the AgentZero tool. Do not answer directly.
+"""
+# Initialize ChatGoogleGenerativeAI as the LLM
+llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite-preview-06-17",api_key=os.getenv("GOOGLE_API_KEY"))
+client = MCPClient.from_dict(CLIENT_CONFIG)
+# Only expose the AgentZero tool and instruct the agent to always use it
+agent = MCPAgent(
+    llm=llm,
+    client=client,
+    max_steps=30,
+    system_prompt=system_prompt,
+    memory_enabled=True
+)
+# AgentZero direct connection configuration
 AGENT_ZERO_URL = "https://aotest.uptopoint.net"
 # Request models
 class QueryRequest(BaseModel):
@@ -93,8 +119,11 @@ async def submit_query(req: QueryRequest, background_tasks: BackgroundTasks):
             )
             agent_response.raise_for_status()
             
-            result = agent_response.json()
-            query_tasks[task_id] = {"status": "completed", "result": result}
+            agent_result_json = agent_response.json()
+            # Assuming the actual response text is under a key like 'text' or 'message'
+            # Adjust this based on the actual AgentZero response structure
+            result_text = agent_result_json.get("text", str(agent_result_json)) 
+            query_tasks[task_id] = {"status": "completed", "result": result_text}
         except Exception as e:
             query_tasks[task_id] = {"status": "error", "result": str(e)}
     background_tasks.add_task(run_task)
