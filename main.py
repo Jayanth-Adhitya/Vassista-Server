@@ -67,8 +67,21 @@ agent = MCPAgent(
 # AgentZero direct connection configuration
 AGENT_ZERO_URL = "https://aotest.uptopoint.net"
 # Request models
+class Message(BaseModel):
+    id: str
+    sender: str
+    text: str
+
+class Notification(BaseModel):
+    id: str
+    title: str
+    body: str
+    timestamp: Any
+
 class QueryRequest(BaseModel):
     query: str
+    messages: list[Message] = []
+    notifications: list[Notification] = []
 class QueryResponse(BaseModel):
     result: str
 class TextToSpeechRequest(BaseModel):
@@ -108,7 +121,22 @@ async def submit_query(req: QueryRequest, background_tasks: BackgroundTasks):
                 "X-CSRF-Token": csrf_token,
                 "Content-Type": "application/json"
             }
-            payload = {"text": req.query}
+            # Construct the context string
+            context_parts = [f"User Query: {req.query}"]
+            
+            if req.messages:
+                context_parts.append("\nRecent Messages:")
+                for msg in req.messages:
+                    context_parts.append(f"- {msg.sender}: {msg.text}")
+            
+            if req.notifications:
+                context_parts.append("\nNotifications:")
+                for notif in req.notifications:
+                    context_parts.append(f"- {notif.title}: {notif.body}")
+            
+            full_query = "\n".join(context_parts)
+            
+            payload = {"text": full_query}
             
             agent_response = requests.post(
                 message_url, 
