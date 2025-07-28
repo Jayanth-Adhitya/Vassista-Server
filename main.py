@@ -100,6 +100,10 @@ async def submit_query(req: QueryRequest, background_tasks: BackgroundTasks):
     """
     task_id = str(uuid.uuid4())
     query_tasks[task_id] = {"status": "running", "result": None}
+    
+    # Log the received request for debugging
+    logger.info(f"Received query request: {req.dict()}")
+
     async def run_task():
         try:
             # Fetch CSRF token and cookies
@@ -135,6 +139,9 @@ async def submit_query(req: QueryRequest, background_tasks: BackgroundTasks):
                     context_parts.append(f"- {notif.title}: {notif.body}")
             
             full_query = "\n".join(context_parts)
+            
+            # Log the constructed query for debugging
+            logger.info(f"Constructed query for AgentZero: {full_query}")
             
             payload = {"text": full_query}
             
