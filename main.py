@@ -50,22 +50,8 @@ CLIENT_CONFIG = {
 # AgentZero direct connection configuration
 AGENT_ZERO_URL = "https://aotest.uptopoint.net"
 # Request models
-class Message(BaseModel):
-    id: str
-    sender: str
-    text: str
-
-class Notification(BaseModel):
-    id: str
-    title: str
-    body: str
-    timestamp: Any
-
 class QueryRequest(BaseModel):
-    query: str
-    messages: list[Message] = []
-    notifications: list[Notification] = []
-    phoneMessages: list[dict] = [] # Use dict to avoid validation issues
+    context: str
 class QueryResponse(BaseModel):
     result: str
 class TextToSpeechRequest(BaseModel):
@@ -86,7 +72,7 @@ async def submit_query(req: QueryRequest, background_tasks: BackgroundTasks):
     query_tasks[task_id] = {"status": "running", "result": None}
     
     # Log the received request for debugging
-    logger.info(f"Received query request: {req.dict()}")
+    logger.info(f"Received query request: {req.context}")
 
     async def run_task():
         try:
@@ -109,25 +95,10 @@ async def submit_query(req: QueryRequest, background_tasks: BackgroundTasks):
                 "X-CSRF-Token": csrf_token,
                 "Content-Type": "application/json"
             }
-            # Construct the context string
-            context_parts = [f"User Query: {req.query}"]
-            
-            if req.phoneMessages:
-                context_parts.append("\nPhone Messages:")
-                for msg in req.phoneMessages:
-                    context_parts.append(f"- {msg.get('sender')}: {msg.get('text')}")
-            
-            if req.notifications:
-                context_parts.append("\nNotifications:")
-                for notif in req.notifications:
-                    context_parts.append(f"- {notif.title}: {notif.body}")
-            
-            full_query = "\n".join(context_parts)
-            
             # Log the constructed query for debugging
-            logger.info(f"Constructed query for AgentZero: {full_query}")
+            logger.info(f"Constructed query for AgentZero: {req.context}")
             
-            payload = {"text": full_query}
+            payload = {"text": req.context}
             
             agent_response = requests.post(
                 message_url, 
