@@ -65,7 +65,7 @@ class QueryRequest(BaseModel):
     query: str
     messages: list[Message] = []
     notifications: list[Notification] = []
-    phoneMessages: list[Message] = []
+    phoneMessages: list[dict] = [] # Use dict to avoid validation issues
 class QueryResponse(BaseModel):
     result: str
 class TextToSpeechRequest(BaseModel):
@@ -115,11 +115,7 @@ async def submit_query(req: QueryRequest, background_tasks: BackgroundTasks):
             if req.phoneMessages:
                 context_parts.append("\nPhone Messages:")
                 for msg in req.phoneMessages:
-                    context_parts.append(f"- {msg.sender}: {msg.text}")
-            elif req.messages:
-                context_parts.append("\nRecent Messages:")
-                for msg in req.messages:
-                    context_parts.append(f"- {msg.sender}: {msg.text}")
+                    context_parts.append(f"- {msg.get('sender')}: {msg.get('text')}")
             
             if req.notifications:
                 context_parts.append("\nNotifications:")
