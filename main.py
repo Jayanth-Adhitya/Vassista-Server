@@ -65,6 +65,7 @@ class QueryRequest(BaseModel):
     query: str
     messages: list[Message] = []
     notifications: list[Notification] = []
+    phoneMessages: list[Message] = []
 class QueryResponse(BaseModel):
     result: str
 class TextToSpeechRequest(BaseModel):
@@ -111,7 +112,11 @@ async def submit_query(req: QueryRequest, background_tasks: BackgroundTasks):
             # Construct the context string
             context_parts = [f"User Query: {req.query}"]
             
-            if req.messages:
+            if req.phoneMessages:
+                context_parts.append("\nPhone Messages:")
+                for msg in req.phoneMessages:
+                    context_parts.append(f"- {msg.sender}: {msg.text}")
+            elif req.messages:
                 context_parts.append("\nRecent Messages:")
                 for msg in req.messages:
                     context_parts.append(f"- {msg.sender}: {msg.text}")
