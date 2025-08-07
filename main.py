@@ -107,7 +107,12 @@ async def submit_query(req: QueryRequest, background_tasks: BackgroundTasks):
                 json=payload, 
                 verify=False # verify=False for self-signed certs if any
             )
-            agent_response.raise_for_status()
+            
+            # Log the full response from AgentZero for debugging
+            logger.info(f"AgentZero response status: {agent_response.status_code}")
+            logger.info(f"AgentZero response content: {agent_response.text}")
+            
+            agent_response.raise_for_status() # This will raise an exception for bad status codes
             
             agent_result_json = agent_response.json()
             # Extract only the 'message' content from the AgentZero response
