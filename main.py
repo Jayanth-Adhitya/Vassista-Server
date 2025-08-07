@@ -42,7 +42,7 @@ CLIENT_CONFIG = {
     "mcpServers": {
         "agent-zero": {
             "type": "sse",
-            "url": "http://aotest.uptopoint.net:7777/mcp/t-jaGTNm4VVMCLKHDF/sse",
+            "url": "https://ao.uptopoint.net/mcp/t-zfGupDxtvOqdx27h/sse",
             # "authorization_token": os.getenv("AGENT_ZERO_TOKEN")
         }
     }
@@ -254,3 +254,4 @@ if __name__ == "__main__":
     import uvicorn
     print("Starting MCP Proxy Server...")
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)  # Disable reload to avoid multiple server instances
+
