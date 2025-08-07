@@ -5,6 +5,7 @@ import requests
 import io
 import logging
 import json
+import base64 # Added this import
 from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
