@@ -48,7 +48,7 @@ CLIENT_CONFIG = {
     }
 }
 # AgentZero direct connection configuration
-AGENT_ZERO_URL = "https://aotest.uptopoint.net"
+AGENT_ZERO_URL = "https://ao.uptopoint.net"
 # Request models
 class QueryRequest(BaseModel):
     context: str
@@ -254,4 +254,5 @@ if __name__ == "__main__":
     import uvicorn
     print("Starting MCP Proxy Server...")
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)  # Disable reload to avoid multiple server instances
+
 
