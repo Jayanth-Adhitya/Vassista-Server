@@ -201,48 +201,62 @@ async def text_to_speech(request: TextToSpeechRequest):
     Convert text to speech using Groq's TTS API
     """
     try:
-        logger.info("Processing text-to-speech request using Groq TTS")
+        logger.info("Processing text-to-speech request using AgentZero's /synthesize endpoint")
         
-        # Get Groq API key from environment variables
-        groq_api_key = os.getenv("GROQ_API_KEY")
-        if not groq_api_key:
-            logger.error("GROQ_API_KEY not found in environment variables")
-            raise HTTPException(status_code=500, detail="GROQ_API_KEY not found in environment variables")
+        # Prepare the request payload for AgentZero's /synthesize endpoint
+        # AgentZero's synthesize.py expects 'text' and optionally 'ctxid'
+        payload = {
+            "text": request.text,
+            # "ctxid": "some_context_id_if_needed" # Add ctxid if your AgentZero setup uses it
+        }
         
-        # Set up the headers for the Groq API request
+        # Send request to AgentZero's /synthesize endpoint
+        synthesize_url = f"{AGENT_ZERO_URL}/synthesize"
+        
+        # Fetch CSRF token and cookies for AgentZero
+        csrf_url = f"{AGENT_ZERO_URL}/csrf_token"
+        csrf_response = requests.get(csrf_url, verify=False)
+        csrf_response.raise_for_status()
+        
+        csrf_json = csrf_response.json()
+        csrf_token = csrf_json.get("token")
+        cookies = csrf_response.cookies
+        
+        if not csrf_token:
+            raise ValueError(f"CSRF token not found for TTS: {csrf_json}")
+
         headers = {
-            "Authorization": f"Bearer {groq_api_key}",
+            "X-CSRF-Token": csrf_token,
             "Content-Type": "application/json"
         }
-        
-        # Prepare the request payload
-        data = {
-            "model": "playai-tts",
-            "voice": request.voice,
-            "input": request.text,
-            "response_format": "wav"
-        }
-        
-        # Make the request to Groq TTS API
-        logger.info(f"Sending TTS request to Groq API with voice: {request.voice}")
+
+        logger.info(f"Sending TTS request to AgentZero at {synthesize_url}")
         response = requests.post(
-            "https://api.groq.com/openai/v1/audio/speech",
+            synthesize_url,
             headers=headers,
-            json=data
+            cookies=cookies,
+            json=payload,
+            verify=False
         )
         
-        # Check if the request was successful
-        if response.status_code != 200:
-            logger.error(f"Groq TTS API error: {response.text}")
+        response.raise_for_status() # Raise an exception for bad status codes
+        
+        agent_tts_response = response.json()
+        
+        if not agent_tts_response.get("success"):
             raise HTTPException(
-                status_code=response.status_code,
-                detail=f"Groq TTS API error: {response.text}"
+                status_code=500,
+                detail=f"AgentZero TTS error: {agent_tts_response.get('error', 'Unknown error')}"
             )
         
-        # Get the audio content
-        audio_content = io.BytesIO(response.content)
+        # AgentZero returns base64 encoded audio
+        base64_audio = agent_tts_response.get("audio")
+        if not base64_audio:
+            raise HTTPException(status_code=500, detail="No audio content received from AgentZero TTS")
+        
+        audio_content = io.BytesIO(base64.b64decode(base64_audio))
         audio_content.seek(0)
-        logger.info("Text-to-speech conversion completed successfully with Groq TTS")
+        logger.info("Text-to-speech conversion completed successfully with AgentZero TTS")
         
         # Return the audio as a streaming response
         return StreamingResponse(
