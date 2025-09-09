@@ -15,6 +15,21 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Dict, Any, List
 import uuid
+
+# Import FastRTC voice agent
+try:
+    from fastrtc_voice_agent import (
+        initialize_agent, 
+        get_fastrtc_stream, 
+        update_mobile_context,
+        mobile_context,
+        voice_agent
+    )
+    FASTRTC_AVAILABLE = True
+    logger.info("FastRTC voice agent imported successfully")
+except ImportError as e:
+    FASTRTC_AVAILABLE = False
+    logger.warning(f"FastRTC not available: {e}")
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -22,6 +37,17 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    # Initialize FastRTC voice agent on startup
+    if FASTRTC_AVAILABLE:
+        try:
+            success = await initialize_agent()
+            if success:
+                logger.info("FastRTC voice agent initialized successfully")
+            else:
+                logger.error("Failed to initialize FastRTC voice agent")
+        except Exception as e:
+            logger.error(f"FastRTC initialization error: {e}")
+    
     yield
 # Initialize FastAPI
 app = FastAPI(
@@ -601,6 +627,129 @@ async def clear_cache():
         "message": f"Cleared {cleared_count} cache entries",
         "cleared_count": cleared_count
     }
+
+# FastRTC Integration Endpoints
+
+class ContextUpdateRequest(BaseModel):
+    sms_messages: List[Dict[str, Any]] = []
+    notifications: List[Dict[str, Any]] = []
+    chat_history: List[Dict[str, Any]] = []
+
+class VoiceQueryRequest(BaseModel):
+    transcript: str
+    context_data: Dict[str, Any] = {}
+
+@app.post("/fastrtc/context")
+async def update_fastrtc_context(request: ContextUpdateRequest):
+    """Update mobile context for FastRTC voice agent"""
+    if not FASTRTC_AVAILABLE:
+        raise HTTPException(status_code=503, detail="FastRTC not available")
+    
+    try:
+        context_data = {
+            "sms_messages": request.sms_messages,
+            "notifications": request.notifications,
+            "chat_history": request.chat_history,
+            "timestamp": time.time()
+        }
+        
+        await update_mobile_context(context_data)
+        
+        return {
+            "status": "success",
+            "message": "Context updated successfully",
+            "timestamp": time.time()
+        }
+        
+    except Exception as e:
+        logger.error(f"Context update error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/fastrtc/voice-query")
+async def process_voice_query(request: VoiceQueryRequest):
+    """Process voice query directly (alternative to WebRTC for testing)"""
+    if not FASTRTC_AVAILABLE:
+        raise HTTPException(status_code=503, detail="FastRTC not available")
+    
+    try:
+        # Update context if provided
+        if request.context_data:
+            await update_mobile_context(request.context_data)
+        
+        # Process voice input
+        response = await voice_agent.process_voice_input(request.transcript)
+        
+        return {
+            "status": "success",
+            "transcript": request.transcript,
+            "response": response,
+            "timestamp": time.time()
+        }
+        
+    except Exception as e:
+        logger.error(f"Voice query error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/fastrtc/status")
+async def fastrtc_status():
+    """Get FastRTC system status"""
+    status = {
+        "fastrtc_available": FASTRTC_AVAILABLE,
+        "timestamp": time.time()
+    }
+    
+    if FASTRTC_AVAILABLE:
+        try:
+            status.update({
+                "stt_ready": voice_agent.stt_server is not None,
+                "tts_ready": voice_agent.tts_server is not None,
+                "agent_initialized": voice_agent.stt_server is not None and voice_agent.tts_server is not None
+            })
+        except:
+            status["agent_initialized"] = False
+    
+    return status
+
+@app.get("/fastrtc/stream")
+async def get_fastrtc_stream_info():
+    """Get FastRTC stream configuration for React Native client"""
+    if not FASTRTC_AVAILABLE:
+        raise HTTPException(status_code=503, detail="FastRTC not available")
+    
+    try:
+        # This would return WebRTC connection details
+        # In a full implementation, this would include STUN/TURN servers, etc.
+        return {
+            "stream_available": True,
+            "webrtc_config": {
+                "iceServers": [
+                    {"urls": "stun:stun.l.google.com:19302"}
+                ]
+            },
+            "endpoints": {
+                "context_update": "/fastrtc/context",
+                "voice_query": "/fastrtc/voice-query",
+                "status": "/fastrtc/status"
+            },
+            "timestamp": time.time()
+        }
+        
+    except Exception as e:
+        logger.error(f"Stream info error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Mount FastRTC stream (if available)
+if FASTRTC_AVAILABLE:
+    try:
+        # This would mount the FastRTC stream for WebRTC connections
+        # Implementation depends on how FastRTC integrates with FastAPI
+        fastrtc_stream = get_fastrtc_stream()
+        if fastrtc_stream:
+            # fastrtc_stream.mount(app)  # Uncomment when FastRTC is properly configured
+            logger.info("FastRTC stream ready for mounting")
+    except Exception as e:
+        logger.warning(f"FastRTC stream mounting failed: {e}")
+
 
 # Global start time for uptime tracking
 start_time = time.time()

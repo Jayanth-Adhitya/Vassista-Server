@@ -1,0 +1,72 @@
+version: '3.8'
+
+services:
+  fastrtc-voice-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.fastrtc  # Use GPU version by default
+    container_name: fastrtc-voice-server
+    ports:
+      - "8000:8000"
+    environment:
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-AIzaSyA9rsKvAwQ3JP9WCr0ZW_fE3q832-B4I8s}
+      - GROQ_API_KEY=${GROQ_API_KEY:-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}
+      - CLICKUP_API_TOKEN=${CLICKUP_API_TOKEN:-pk_96732703_BMQ18G3SJ5N7TGYFFKAVDXXS0LP6QT1I}
+      - CUDA_VISIBLE_DEVICES=0
+      - TORCH_HOME=/app/models
+      - HF_HOME=/app/cache
+      - TRANSFORMERS_CACHE=/app/cache
+    volumes:
+      - ./models:/app/models      # Persistent model storage
+      - ./cache:/app/cache        # Persistent cache storage
+      - ./logs:/app/logs          # Persistent logs
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s  # Allow time for model loading
+
+  # CPU-only version (comment out GPU version above and uncomment this)
+  # fastrtc-voice-server-cpu:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile.fastrtc-cpu
+  #   container_name: fastrtc-voice-server-cpu
+  #   ports:
+  #     - "8000:8000"
+  #   environment:
+  #     - GOOGLE_API_KEY=${GOOGLE_API_KEY:-AIzaSyA9rsKvAwQ3JP9WCr0ZW_fE3q832-B4I8s}
+  #     - GROQ_API_KEY=${GROQ_API_KEY:-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}
+  #     - CLICKUP_API_TOKEN=${CLICKUP_API_TOKEN:-pk_96732703_BMQ18G3SJ5N7TGYFFKAVDXXS0LP6QT1I}
+  #     - TORCH_HOME=/app/models
+  #     - HF_HOME=/app/cache
+  #     - TRANSFORMERS_CACHE=/app/cache
+  #     - CUDA_VISIBLE_DEVICES=""
+  #   volumes:
+  #     - ./models:/app/models
+  #     - ./cache:/app/cache
+  #     - ./logs:/app/logs
+  #   restart: unless-stopped
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 120s  # CPU model loading takes longer
+
+volumes:
+  models:
+    driver: local
+  cache:
+    driver: local
+  logs:
+    driver: local
