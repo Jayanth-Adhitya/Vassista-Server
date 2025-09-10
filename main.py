@@ -16,7 +16,14 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Dict, Any, List
 import uuid
 
-# Import FastRTC voice agent
+# Set up logging first
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Load environment variables
+load_dotenv()
+
+# Import FastRTC voice agent after logging setup
 try:
     from fastrtc_voice_agent import (
         initialize_agent, 
@@ -30,11 +37,6 @@ try:
 except ImportError as e:
     FASTRTC_AVAILABLE = False
     logger.warning(f"FastRTC not available: {e}")
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-# Load environment variables
-load_dotenv()
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Initialize FastRTC voice agent on startup
