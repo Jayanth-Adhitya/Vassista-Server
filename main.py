@@ -34,9 +34,18 @@ try:
     )
     FASTRTC_AVAILABLE = True
     logger.info("FastRTC voice agent imported successfully")
-except ImportError as e:
+except Exception as e:
     FASTRTC_AVAILABLE = False
-    logger.warning(f"FastRTC not available: {e}")
+    logger.warning(f"FastRTC not available, using fallback: {e}")
+    
+    # Import fallback implementation
+    from fastrtc_voice_agent_fallback import (
+        initialize_agent, 
+        get_fastrtc_stream, 
+        update_mobile_context,
+        mobile_context,
+        voice_agent
+    )
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Initialize FastRTC voice agent on startup
