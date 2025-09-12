@@ -41,8 +41,11 @@ class KimiSTTServer:
         try:
             logger.info(f"Loading Kimi-Audio model: {self.model_name}")
             
-            # Load processor and model
-            self.processor = AutoProcessor.from_pretrained(self.model_name)
+            # Load processor and model with trust_remote_code=True
+            self.processor = AutoProcessor.from_pretrained(
+                self.model_name,
+                trust_remote_code=True
+            )
             self.model = AutoModelForSpeechSeq2Seq.from_pretrained(
                 self.model_name,
                 torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
