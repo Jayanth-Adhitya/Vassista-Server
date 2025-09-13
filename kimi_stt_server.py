@@ -41,17 +41,41 @@ class KimiSTTServer:
         try:
             logger.info(f"Loading Kimi-Audio model: {self.model_name}")
             
-            # Load processor and model with trust_remote_code=True
-            self.processor = AutoProcessor.from_pretrained(
-                self.model_name,
-                trust_remote_code=True
-            )
-            self.model = AutoModelForSpeechSeq2Seq.from_pretrained(
-                self.model_name,
-                torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
-                device_map=self.device,
-                trust_remote_code=True
-            )
+            # Load model with trust_remote_code=True - try different loading approaches
+            try:
+                # Try AutoModel first (more generic)
+                from transformers import AutoModel, AutoTokenizer
+                self.model = AutoModel.from_pretrained(
+                    self.model_name,
+                    torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
+                    device_map=self.device,
+                    trust_remote_code=True
+                )
+                self.processor = AutoTokenizer.from_pretrained(
+                    self.model_name,
+                    trust_remote_code=True
+                )
+                logger.info("Loaded Kimi-Audio with AutoModel + AutoTokenizer")
+            except Exception as e1:
+                logger.warning(f"AutoModel loading failed: {e1}")
+                try:
+                    # Fallback to direct model loading
+                    self.model = AutoModelForSpeechSeq2Seq.from_pretrained(
+                        self.model_name,
+                        torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
+                        device_map=self.device,
+                        trust_remote_code=True
+                    )
+                    # Use a simple tokenizer fallback
+                    from transformers import AutoTokenizer
+                    self.processor = AutoTokenizer.from_pretrained(
+                        "openai/whisper-base",  # Use Whisper tokenizer as fallback
+                        trust_remote_code=True
+                    )
+                    logger.info("Loaded Kimi-Audio with fallback tokenizer")
+                except Exception as e2:
+                    logger.error(f"Both loading methods failed: {e1}, {e2}")
+                    raise e2
             
             # Set model to evaluation mode
             self.model.eval()
