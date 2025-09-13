@@ -38,6 +38,7 @@ mobile_context = MockMobileContextManager()
 async def initialize_agent():
     """Initialize the FastRTC voice agent (fallback)"""
     logger.warning("FastRTC dependencies not available - using fallback mode")
+    logger.info("Note: faster-whisper STT may still work independently if available")
     return False
 
 def get_fastrtc_stream():

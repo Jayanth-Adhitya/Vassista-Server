@@ -15,7 +15,7 @@ from fastrtc import Stream, ReplyOnPause, get_stt_model, get_tts_model
 from contextlib import asynccontextmanager
 
 # Import our local servers
-from kimi_stt_server import get_stt_server, process_audio_for_fastrtc
+from faster_whisper_stt_server import get_stt_server, process_audio_for_fastrtc
 from kokoro_tts_server import get_tts_server, synthesize_for_fastrtc, synthesize_base64_for_fastrtc
 
 # Set up logging
