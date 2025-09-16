@@ -6,7 +6,7 @@ requests>=2.31.0
 python-multipart>=0.0.6
 
 # FastRTC integration
-fastrtc[vad,tts]>=0.1.0
+fastrtc[vad,tts]>=0.0.32
 numpy>=1.24.0
 soundfile>=0.12.0
 
