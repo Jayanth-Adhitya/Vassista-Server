@@ -2,5 +2,15 @@ fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
 python-dotenv>=1.0.0
 requests>=2.31.0
-websockets>=11.0.0
+# websockets>=11.0.0  # Removed - FastRTC WebRTC replaces WebSocket streaming
 python-multipart>=0.0.6
+
+# FastRTC integration
+fastrtc[vad,tts]>=0.1.0
+numpy>=1.24.0
+soundfile>=0.12.0
+
+# STT/TTS models (keeping existing)
+faster-whisper>=1.0.0
+torch>=2.0.0
+torchaudio>=2.0.0

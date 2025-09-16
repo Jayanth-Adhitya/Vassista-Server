@@ -120,6 +120,52 @@ class FasterWhisperSTTServer:
             logger.error(f"Sync transcription error: {e}")
             return ""
     
+    async def transcribe_audio_array(self, audio_array: np.ndarray, sample_rate: int = 16000) -> str:
+        """
+        Transcribe audio array directly (for FastRTC integration)
+
+        Args:
+            audio_array: numpy array of audio data
+            sample_rate: sample rate of the audio
+
+        Returns:
+            str: transcribed text
+        """
+        try:
+            logger.info(f"Transcribing audio array: shape={audio_array.shape}, sr={sample_rate}")
+
+            # Ensure we have a 1D array
+            if audio_array.ndim > 1:
+                audio_array = np.mean(audio_array, axis=0)
+
+            # Ensure proper format for faster-whisper
+            if audio_array.dtype != np.float32:
+                audio_array = audio_array.astype(np.float32)
+
+            # Resample if needed
+            if sample_rate != self.sample_rate:
+                import librosa
+                audio_array = librosa.resample(
+                    audio_array,
+                    orig_sr=sample_rate,
+                    target_sr=self.sample_rate
+                )
+
+            # Run transcription in thread pool to avoid blocking
+            loop = asyncio.get_event_loop()
+            transcription = await loop.run_in_executor(
+                self.executor,
+                self._transcribe_sync,
+                audio_array
+            )
+
+            logger.info(f"Transcription result: {transcription}")
+            return transcription
+
+        except Exception as e:
+            logger.error(f"Audio array transcription error: {e}")
+            return ""
+
     async def transcribe_chunk(self, audio_chunk: np.ndarray, original_sr: int = None) -> str:
         """Transcribe a single audio chunk using faster-whisper (async)"""
         try:
