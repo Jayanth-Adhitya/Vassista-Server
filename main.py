@@ -88,6 +88,11 @@ CLIENT_CONFIG = {
 # ================ FastRTC Configuration ================
 # Enable local FastRTC streaming with Faster Whisper + Kokoro TTS
 USE_FASTRTC_STREAMING = True  # Use FastRTC streaming system
+USE_LOCAL_SERVICES = True     # Use local STT/TTS services
+
+# Local service URLs
+LOCAL_STT_URL = "http://localhost:8001"  # Faster Whisper STT server
+LOCAL_TTS_URL = "http://localhost:8002"  # Kokoro TTS server
 
 # AgentZero external services (for AI responses, not TTS)
 AGENT_ZERO_URL = "https://ao.uptopoint.net"
@@ -551,13 +556,10 @@ async def transcribe_audio(audio: UploadFile = File(...)):
 
             except requests.exceptions.RequestException as e:
                 logger.error(f"Failed to connect to local STT server: {e}")
-                logger.info("Falling back to Groq API")
-                # Fall back to Groq if local server is not available
-                transcribed_text = await transcribe_with_groq(temp_audio_path)
+                raise HTTPException(status_code=503, detail="Local STT server unavailable")
         else:
-            # Use Groq API
-            logger.info("Using Groq API for transcription")
-            transcribed_text = await transcribe_with_groq(temp_audio_path)
+            # No fallback - only use local services
+            raise HTTPException(status_code=503, detail="Local STT services disabled")
 
         # Clean up the temporary file
         os.unlink(temp_audio_path)
@@ -568,134 +570,18 @@ async def transcribe_audio(audio: UploadFile = File(...)):
         logger.error(f"Transcription error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Transcription error: {str(e)}")
 
-async def transcribe_with_groq(temp_audio_path: str) -> str:
-    """Helper function to transcribe audio using Groq API"""
-    # Get Groq API key from environment variables
-    groq_api_key = os.getenv("GROQ_API_KEY")
-    if not groq_api_key:
-        logger.error("GROQ_API_KEY not found in environment variables")
-        raise HTTPException(status_code=500, detail="GROQ_API_KEY not found in environment variables")
-
-    # Set up the headers for the Groq API request
-    headers = {"Authorization": f"Bearer {groq_api_key}"}
-
-    # Prepare the form data for the Groq API request
-    with open(temp_audio_path, "rb") as audio_file:
-        files = {"file": (os.path.basename(temp_audio_path), audio_file, "audio/wav")}
-        data = {
-            "model": "whisper-large-v3-turbo",
-            "response_format": "json",
-            "language": "en",
-            "temperature": 0.0
-        }
-
-        # Make the request to Groq API
-        logger.info("Sending request to Groq API")
-        response = requests.post(
-            "https://api.groq.com/openai/v1/audio/transcriptions",
-            headers=headers,
-            files=files,
-            data=data
-        )
-
-    # Check if the request was successful
-    if response.status_code != 200:
-        logger.error(f"Groq API error: {response.text}")
-        raise HTTPException(
-            status_code=response.status_code,
-            detail=f"Groq API error: {response.text}"
-        )
-
-    # Parse the response
-    result = response.json()
-    return result.get("text", "").strip()
+# Groq functions removed - using only local FastRTC services
 
 @app.post("/speak")
 async def text_to_speech(request: TextToSpeechRequest):
     """
-    Convert text to speech using local Kokoro TTS or AgentZero's TTS API
+    DISABLED: This endpoint is replaced by FastRTC streaming TTS via WebSocket
     """
-    try:
-        if USE_LOCAL_SERVICES:
-            # Use local Kokoro TTS server
-            logger.info("Processing text-to-speech request using local Kokoro TTS server")
-            try:
-                payload = {"text": request.text}
-                response = requests.post(f"{LOCAL_TTS_URL}/synthesize", json=payload, timeout=30)
-
-                if response.status_code == 200:
-                    logger.info("Kokoro TTS synthesis successful")
-                    # Return the audio as a streaming response
-                    return StreamingResponse(
-                        io.BytesIO(response.content),
-                        media_type="audio/wav",
-                        headers={"Content-Disposition": "attachment; filename=speech.wav"}
-                    )
-                else:
-                    logger.error(f"Kokoro TTS failed: {response.status_code}")
-                    raise HTTPException(status_code=500, detail=f"Local TTS server error: {response.status_code}")
-
-            except requests.exceptions.RequestException as e:
-                logger.error(f"Failed to connect to local TTS server: {e}")
-                logger.info("Falling back to AgentZero TTS")
-                # Fall back to AgentZero if local server is not available
-                return await synthesize_with_agentzero(request.text)
-        else:
-            # Use AgentZero TTS
-            logger.info("Processing text-to-speech request using AgentZero's /synthesize endpoint")
-            return await synthesize_with_agentzero(request.text)
-        
-        csrf_json = csrf_response.json()
-        csrf_token = csrf_json.get("token")
-        cookies = csrf_response.cookies
-        
-        if not csrf_token:
-            raise ValueError(f"CSRF token not found for TTS: {csrf_json}")
-
-        headers = {
-            "X-CSRF-Token": csrf_token,
-            "Content-Type": "application/json"
-        }
-
-        logger.info(f"Sending TTS request to AgentZero at {synthesize_url}")
-        response = requests.post(
-            synthesize_url,
-            headers=headers,
-            cookies=cookies,
-            json=payload,
-            verify=False
-        )
-        
-        response.raise_for_status() # Raise an exception for bad status codes
-        
-        agent_tts_response = response.json()
-        
-        if not agent_tts_response.get("success"):
-            raise HTTPException(
-                status_code=500,
-                detail=f"AgentZero TTS error: {agent_tts_response.get('error', 'Unknown error')}"
-            )
-        
-        # AgentZero returns base64 encoded audio
-        base64_audio = agent_tts_response.get("audio")
-        if not base64_audio:
-            raise HTTPException(status_code=500, detail="No audio content received from AgentZero TTS")
-        
-        audio_content = io.BytesIO(base64.b64decode(base64_audio))
-        audio_content.seek(0)
-        logger.info("Text-to-speech conversion completed successfully with AgentZero TTS")
-        
-        # Return the audio as a streaming response
-        return StreamingResponse(
-            audio_content,
-            media_type="audio/wav",
-            headers={
-                "Content-Disposition": "attachment; filename=speech.wav"
-            }
-        )
-    except Exception as e:
-        logger.error(f"Groq TTS error: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Groq TTS error: {str(e)}")
+    logger.info("/speak endpoint called but disabled - use FastRTC streaming instead")
+    raise HTTPException(
+        status_code=410,
+        detail="TTS endpoint disabled - use FastRTC WebSocket streaming with request_tts=true"
+    )
 # Health check endpoint
 @app.get("/health")
 async def health_check():
