@@ -186,7 +186,7 @@ class FastRTCVoiceHandler:
                 logger.error(f"❌ Error TTS failed: {tts_error}")
 
 def create_fastrtc_stream(agent_zero_url: str = "https://ao.uptopoint.net") -> Stream:
-    """Create and configure FastRTC stream with voice handler"""
+    """Create and configure FastRTC stream with voice handler using WebSocket mode"""
 
     # Create voice handler instance
     voice_handler = FastRTCVoiceHandler(agent_zero_url)

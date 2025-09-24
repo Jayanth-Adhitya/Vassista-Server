@@ -1,0 +1,14 @@
+# LiveKit Agent Dependencies
+livekit-agents==0.8.0
+livekit-api==0.13.0
+livekit-plugins-openai==0.7.0
+livekit-plugins-silero==0.6.0
+
+# HTTP client for API calls
+httpx==0.25.2
+
+# Audio processing
+numpy==1.24.3
+
+# Additional utilities
+python-dotenv==1.0.0

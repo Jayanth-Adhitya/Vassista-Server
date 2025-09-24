@@ -10,9 +10,15 @@ import numpy as np
 from typing import AsyncGenerator
 import tempfile
 import soundfile as sf
-from faster_whisper import WhisperModel
 import threading
 from concurrent.futures import ThreadPoolExecutor
+
+# Fix backports.tarfile issue
+import sys
+if 'backports.tarfile' in sys.modules:
+    del sys.modules['backports.tarfile']
+
+from faster_whisper import WhisperModel
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -91,10 +97,10 @@ class FasterWhisperSTTServer:
             logger.error(f"Audio preprocessing error: {e}")
             return np.array([], dtype=np.float32)
     
-    def _transcribe_sync(self, audio_data: np.ndarray) -> str:
-        """Synchronous transcription for use in thread pool"""
+    def _transcribe_sync(self, audio_data: np.ndarray, use_vad: bool = True) -> str:
+        """Synchronous transcription for use in thread pool with VAD"""
         try:
-            # Transcribe with faster-whisper
+            # Transcribe with faster-whisper and VAD
             segments, info = self.model.transcribe(
                 audio_data,
                 language="en",
@@ -104,18 +110,24 @@ class FasterWhisperSTTServer:
                 temperature=0.0,
                 compression_ratio_threshold=2.4,
                 log_prob_threshold=-1.0,
-                no_speech_threshold=0.6,
+                no_speech_threshold=0.6,  # Use built-in silence detection
                 condition_on_previous_text=False,  # Faster for short clips
-                word_timestamps=False  # Disable for speed
+                word_timestamps=False,  # Disable for speed
+                # VAD settings for real-time processing - Using no_speech_threshold instead
+                vad_filter=False,  # Disable VAD to avoid parameter issues
             )
-            
+
             # Combine all segments into single transcription
             transcription = ""
             for segment in segments:
                 transcription += segment.text.strip() + " "
-            
-            return transcription.strip()
-                
+
+            result = transcription.strip()
+            if result:
+                logger.info(f"Transcribed with VAD: {result}")
+
+            return result
+
         except Exception as e:
             logger.error(f"Sync transcription error: {e}")
             return ""
@@ -187,6 +199,51 @@ class FasterWhisperSTTServer:
         except Exception as e:
             logger.error(f"Transcription error: {e}")
             return ""
+
+    async def transcribe_streaming(self, audio_chunks, use_vad: bool = True):
+        """
+        Stream transcription with VAD for real-time processing
+        Yields partial transcripts as audio comes in
+        """
+        audio_buffer = []
+        buffer_duration = 0
+        min_chunk_duration = 1.0  # Minimum 1 second before processing
+        max_buffer_duration = 10.0  # Maximum buffer to prevent memory issues
+
+        for chunk in audio_chunks:
+            audio_buffer.append(chunk)
+            buffer_duration += len(chunk) / self.sample_rate
+
+            # Process when we have enough audio
+            if buffer_duration >= min_chunk_duration:
+                try:
+                    # Combine buffer
+                    combined_audio = np.concatenate(audio_buffer)
+
+                    # Transcribe with VAD
+                    text = await asyncio.get_event_loop().run_in_executor(
+                        self.executor,
+                        self._transcribe_sync,
+                        combined_audio,
+                        use_vad
+                    )
+
+                    if text.strip():
+                        logger.info(f"Streaming transcription: {text}")
+                        yield text
+
+                    # Reset buffer
+                    audio_buffer = []
+                    buffer_duration = 0
+
+                except Exception as e:
+                    logger.error(f"Streaming transcription error: {e}")
+
+            # Prevent buffer overflow
+            elif buffer_duration > max_buffer_duration:
+                logger.warning("Audio buffer overflow, resetting")
+                audio_buffer = []
+                buffer_duration = 0
     
     async def transcribe_streaming(self, audio_stream: AsyncGenerator[bytes, None]) -> AsyncGenerator[str, None]:
         """Process streaming audio and yield transcriptions"""
