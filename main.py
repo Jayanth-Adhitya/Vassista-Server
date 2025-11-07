@@ -1362,8 +1362,8 @@ async def count_sms_messages(
 
 # ================ MCP SSE Endpoints for Remote AgentZero ================
 
-# Create SSE transport
-sse_transport = SseServerTransport("/mcp/sse")
+# Create SSE transport with messages path
+sse_transport = SseServerTransport("/mcp/messages/")
 
 @app.get("/mcp/sse")
 async def handle_sse(request: Request):
@@ -1371,6 +1371,7 @@ async def handle_sse(request: Request):
     SSE endpoint for MCP - AgentZero connects here for real-time tool access.
     This is the endpoint AgentZero will use to discover and call SMS tools.
     """
+    from starlette.responses import Response
     logger.info("🌊 MCP SSE Connection established")
 
     async with sse_transport.connect_sse(
@@ -1389,17 +1390,10 @@ async def handle_sse(request: Request):
             logger.error(f"❌ MCP SSE error: {e}")
             raise
 
-@app.post("/mcp/sse/message")
-async def handle_sse_message(request: Request):
-    """
-    Handle messages from AgentZero via SSE.
-    AgentZero sends tool call requests to this endpoint.
-    """
-    body = await request.body()
-    logger.info(f"📨 MCP SSE Message received: {len(body)} bytes")
+    return Response()
 
-    await sse_transport.handle_post_message(request.scope, request.receive, request._send)
-    return {"status": "ok"}
+# Mount the message handler as an ASGI app
+app.mount("/mcp/messages/", sse_transport.handle_post_message)
 
 # ================ MCP Tools HTTP Endpoints for AgentZero ================
 
