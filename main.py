@@ -7,7 +7,7 @@ import logging
 import json
 import base64
 import time
-from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks, Query, Body, WebSocket, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks, Query, Body, WebSocket, Form, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -15,6 +15,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Dict, Any, List, Optional
 import uuid
+
+# MCP SSE imports
+from mcp.server import Server
+from mcp.server.sse import SseServerTransport
+from mcp.types import Tool, TextContent
+from sse_starlette.sse import EventSourceResponse
 
 # Set up logging first
 logging.basicConfig(level=logging.INFO)
@@ -166,6 +172,57 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ================ MCP SSE Server Setup ================
+# Create MCP server for SMS tools
+mcp_server = Server("sms-search-server")
+
+@mcp_server.list_tools()
+async def mcp_list_tools() -> list[Tool]:
+    """List all SMS tools available via MCP"""
+    tools_schema = get_sms_tools_schema()
+
+    mcp_tools = []
+    for tool_info in tools_schema:
+        mcp_tools.append(Tool(
+            name=tool_info["name"],
+            description=tool_info["description"],
+            inputSchema=tool_info["input_schema"]
+        ))
+
+    logger.info(f"📋 MCP SSE: Listed {len(mcp_tools)} tools")
+    return mcp_tools
+
+@mcp_server.call_tool()
+async def mcp_call_tool(name: str, arguments: Any) -> list[TextContent]:
+    """Handle MCP tool calls via SSE"""
+    logger.info(f"🔧 MCP SSE Tool Call: {name} with args: {arguments}")
+
+    # Execute the tool using our existing function
+    result = await execute_sms_tool(name, arguments)
+
+    if "error" in result:
+        return [TextContent(
+            type="text",
+            text=f"Error: {result['error']}"
+        )]
+
+    # Format the result
+    if name == "search_sms" or name == "get_recent_sms":
+        results = result.get("results", [])
+        if not results:
+            return [TextContent(type="text", text="No SMS messages found.")]
+
+        formatted = format_sms_results_for_context(results)
+        return [TextContent(type="text", text=formatted)]
+
+    elif name == "count_sms":
+        count = result.get("count", 0)
+        return [TextContent(type="text", text=f"Total SMS messages: {count}")]
+
+    else:
+        return [TextContent(type="text", text=str(result))]
+
 # Configuration for MCP servers 
 CLIENT_CONFIG = {
     "mcpServers": {
@@ -1303,6 +1360,194 @@ async def count_sms_messages(
         logger.error(f"SMS count error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# ================ MCP SSE Endpoints for Remote AgentZero ================
+
+# Create SSE transport
+sse_transport = SseServerTransport("/mcp/sse")
+
+@app.get("/mcp/sse")
+async def handle_sse(request: Request):
+    """
+    SSE endpoint for MCP - AgentZero connects here for real-time tool access.
+    This is the endpoint AgentZero will use to discover and call SMS tools.
+    """
+    logger.info("🌊 MCP SSE Connection established")
+
+    async def event_generator():
+        async with sse_transport.connect_sse(
+            request.scope,
+            request.receive,
+            request._send
+        ) as streams:
+            read_stream, write_stream = streams
+            try:
+                await mcp_server.run(
+                    read_stream,
+                    write_stream,
+                    mcp_server.create_initialization_options()
+                )
+            except Exception as e:
+                logger.error(f"❌ MCP SSE error: {e}")
+                raise
+
+    return EventSourceResponse(event_generator())
+
+@app.post("/mcp/sse/message")
+async def handle_sse_message(request: Request):
+    """
+    Handle messages from AgentZero via SSE.
+    AgentZero sends tool call requests to this endpoint.
+    """
+    body = await request.body()
+    logger.info(f"📨 MCP SSE Message received: {len(body)} bytes")
+
+    await sse_transport.handle_post_message(request.scope, request.receive, request._send)
+    return {"status": "ok"}
+
+# ================ MCP Tools HTTP Endpoints for AgentZero ================
+
+@app.get("/mcp/tools")
+async def list_mcp_tools():
+    """
+    List all available MCP tools for AgentZero.
+    This endpoint allows AgentZero to discover what SMS tools are available.
+    """
+    tools = get_sms_tools_schema()
+
+    return {
+        "tools": tools,
+        "server_info": {
+            "name": "sms-search-server",
+            "version": "1.0.0",
+            "description": "SMS search and analysis tools",
+            "capabilities": ["tools"]
+        }
+    }
+
+class MCPToolCallRequest(BaseModel):
+    tool_name: str
+    arguments: Dict[str, Any]
+
+@app.post("/mcp/call-tool")
+async def call_mcp_tool(request: MCPToolCallRequest):
+    """
+    Execute an MCP tool call from AgentZero.
+    AgentZero can call this endpoint to execute SMS search tools.
+    """
+    logger.info(f"🔧 MCP Tool Call: {request.tool_name} with args: {request.arguments}")
+
+    if not SMS_RAG_AVAILABLE or not sms_store:
+        raise HTTPException(status_code=503, detail="SMS RAG services not available")
+
+    try:
+        tool_name = request.tool_name
+        arguments = request.arguments
+
+        if tool_name == "search_sms":
+            query = arguments.get("query")
+            if not query:
+                raise HTTPException(status_code=400, detail="Query parameter is required")
+
+            top_k = arguments.get("top_k", 10)
+            time_window_days = arguments.get("time_window_days")
+            contact = arguments.get("contact")
+
+            results = await asyncio.to_thread(
+                sms_store.search_sms,
+                query,
+                top_k=top_k,
+                time_window_days=time_window_days,
+                contact=contact
+            )
+
+            if not results:
+                return {
+                    "success": True,
+                    "result": "No relevant SMS messages found."
+                }
+
+            # Format results
+            formatted_results = []
+            for i, msg in enumerate(results, 1):
+                date_iso = msg.get('date_iso', '')
+                address = msg.get('address', 'unknown')
+                body = msg.get('body', '')
+                similarity = msg.get('similarity', 0)
+
+                formatted_results.append(
+                    f"{i}. [{date_iso}] From: {address} (relevance: {similarity:.2f})\n"
+                    f"   Message: {body}"
+                )
+
+            result_text = "\n\n".join(formatted_results)
+            return {
+                "success": True,
+                "result": f"Found {len(results)} relevant SMS messages:\n\n{result_text}"
+            }
+
+        elif tool_name == "get_recent_sms":
+            limit = arguments.get("limit", 10)
+            contact = arguments.get("contact")
+            days = arguments.get("days", 7)
+
+            results = await asyncio.to_thread(
+                sms_store.get_recent_sms,
+                limit=limit,
+                contact=contact,
+                days=days
+            )
+
+            if not results:
+                return {
+                    "success": True,
+                    "result": "No recent SMS messages found."
+                }
+
+            # Format results
+            formatted_results = []
+            for i, msg in enumerate(results, 1):
+                date_iso = msg.get('date_iso', '')
+                address = msg.get('address', 'unknown')
+                body = msg.get('body', '')
+
+                formatted_results.append(
+                    f"{i}. [{date_iso}] From: {address}\n"
+                    f"   Message: {body}"
+                )
+
+            result_text = "\n\n".join(formatted_results)
+            return {
+                "success": True,
+                "result": f"Recent SMS messages (last {days} days):\n\n{result_text}"
+            }
+
+        elif tool_name == "count_sms":
+            contact = arguments.get("contact")
+            days = arguments.get("days")
+
+            count = await asyncio.to_thread(
+                sms_store.count_sms,
+                contact=contact,
+                days=days
+            )
+
+            time_desc = f"in the last {days} days" if days else "total"
+            contact_desc = f" from {contact}" if contact else ""
+
+            return {
+                "success": True,
+                "result": f"Found {count} SMS messages{contact_desc} ({time_desc})."
+            }
+
+        else:
+            raise HTTPException(status_code=404, detail=f"Unknown tool: {tool_name}")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error executing MCP tool {request.tool_name}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 # FastRTC Integration Endpoints
 
 class ContextUpdateRequest(BaseModel):
@@ -1769,11 +2014,35 @@ async def call_agent_zero(query_text: str, is_context_enhanced: bool = False, to
             tools_info = get_sms_tools_schema()
             sms_count = await asyncio.to_thread(sms_store.count_sms)
 
-            # Append tool availability information to the query
-            tools_context = f"\n\n--- Available Tools ---\nYou have access to the user's SMS message database ({sms_count} messages indexed). You can search through their messages to find relevant information. To use this capability, explicitly mention in your response what SMS information you would need, and I will retrieve it for you in a follow-up interaction."
+            # Get the base URL of our server
+            server_url = "https://zswok4sc8c44w804kw8gss8g.uptopoint.net"
+
+            # Append tool availability information with MCP endpoints
+            tools_context = f"""
+
+--- Available MCP Tools ---
+You have access to the user's SMS message database ({sms_count} messages indexed).
+
+To use SMS tools, you can call these endpoints:
+
+1. **search_sms** - Search SMS semantically
+   Endpoint: POST {server_url}/mcp/call-tool
+   Payload: {{"tool_name": "search_sms", "arguments": {{"query": "your search query", "top_k": 10}}}}
+
+2. **get_recent_sms** - Get recent SMS messages
+   Endpoint: POST {server_url}/mcp/call-tool
+   Payload: {{"tool_name": "get_recent_sms", "arguments": {{"limit": 10, "days": 7}}}}
+
+3. **count_sms** - Count total SMS
+   Endpoint: POST {server_url}/mcp/call-tool
+   Payload: {{"tool_name": "count_sms", "arguments": {{"days": 30}}}}
+
+Tool List: GET {server_url}/mcp/tools
+
+IMPORTANT: When the user asks about SMS, messages, or money transactions, USE THESE TOOLS by making HTTP POST requests to retrieve the actual data. Don't just mention that you need the information - actively fetch it using the endpoints above."""
 
             payload["text"] = query_text + tools_context
-            logger.info(f"🔧 Added SMS tools context ({sms_count} messages available)")
+            logger.info(f"🔧 Added MCP SMS tools context ({sms_count} messages available)")
 
         response = requests.post(
             message_url,
