@@ -20,7 +20,7 @@ import uuid
 from mcp.server import Server
 from mcp.server.sse import SseServerTransport
 from mcp.types import Tool, TextContent
-from sse_starlette.sse import EventSourceResponse
+# from sse_starlette.sse import EventSourceResponse  # Not needed - SSE transport handles it
 
 # Set up logging first
 logging.basicConfig(level=logging.INFO)
@@ -1373,24 +1373,21 @@ async def handle_sse(request: Request):
     """
     logger.info("🌊 MCP SSE Connection established")
 
-    async def event_generator():
-        async with sse_transport.connect_sse(
-            request.scope,
-            request.receive,
-            request._send
-        ) as streams:
-            read_stream, write_stream = streams
-            try:
-                await mcp_server.run(
-                    read_stream,
-                    write_stream,
-                    mcp_server.create_initialization_options()
-                )
-            except Exception as e:
-                logger.error(f"❌ MCP SSE error: {e}")
-                raise
-
-    return EventSourceResponse(event_generator())
+    async with sse_transport.connect_sse(
+        request.scope,
+        request.receive,
+        request._send
+    ) as streams:
+        read_stream, write_stream = streams
+        try:
+            await mcp_server.run(
+                read_stream,
+                write_stream,
+                mcp_server.create_initialization_options()
+            )
+        except Exception as e:
+            logger.error(f"❌ MCP SSE error: {e}")
+            raise
 
 @app.post("/mcp/sse/message")
 async def handle_sse_message(request: Request):
