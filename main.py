@@ -55,6 +55,17 @@ except Exception as e:
     FasterWhisperSTTServer = None
     KokoroTTSServer = None
 
+# Import SMS RAG components
+try:
+    from sms_rag import SMSVectorStore, SMSQueryAnalyzer
+    SMS_RAG_AVAILABLE = True
+    logger.info("SMS RAG services imported successfully")
+except ImportError as e:
+    SMS_RAG_AVAILABLE = False
+    logger.error(f"SMS RAG services not available: {e}")
+    SMSVectorStore = None
+    SMSQueryAnalyzer = None
+
 # WebRTC signaling server
 from webrtc_signaling import signaling_server
 from fastrtc_voice_agent import initialize_audio_relay
@@ -64,9 +75,11 @@ import numpy as np
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Initialize voice services on startup
-    global stt_server, tts_server
+    global stt_server, tts_server, sms_store, query_analyzer
     stt_server = None
     tts_server = None
+    sms_store = None
+    query_analyzer = None
 
     if VOICE_SERVICES_AVAILABLE:
         try:
@@ -112,11 +125,32 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.info("✅ FastRTC voice agent initialized (signaling only)")
         logger.info("✅ WebRTC signaling server ready at /ws")
 
+    # Initialize SMS RAG services
+    if SMS_RAG_AVAILABLE:
+        try:
+            logger.info("Initializing SMS RAG services...")
+            sms_store = SMSVectorStore(
+                persist_directory="./chroma_sms_db",
+                collection_name="sms_messages",
+                model_name="all-MiniLM-L6-v2"
+            )
+            query_analyzer = SMSQueryAnalyzer()
+            logger.info("✅ SMS RAG services initialized successfully")
+        except Exception as e:
+            logger.error(f"❌ SMS RAG services initialization error: {e}")
+            sms_store = None
+            query_analyzer = None
+    else:
+        logger.warning("SMS RAG services not available")
+
     yield
 
 # Global voice service instances
 stt_server = None
 tts_server = None
+# Global SMS RAG service instances
+sms_store = None
+query_analyzer = None
 # Initialize FastAPI
 app = FastAPI(
     title="MCP Proxy Server",
@@ -146,6 +180,7 @@ CLIENT_CONFIG = {
 # Enable local FastRTC streaming with Faster Whisper + Kokoro TTS
 USE_FASTRTC_STREAMING = True  # Use FastRTC streaming system
 USE_LOCAL_SERVICES = True     # Use local STT/TTS services
+FASTRTC_AVAILABLE = True      # FastRTC WebRTC components available
 
 # Local service URLs
 LOCAL_STT_URL = "http://localhost:8001"  # Faster Whisper STT server
@@ -163,6 +198,28 @@ class TextToSpeechRequest(BaseModel):
     voice: str = "Fritz-PlayAI"  # Default voice
 class TranscriptionResponse(BaseModel):
     text: str
+
+# SMS RAG request/response models
+class SMSIndexRequest(BaseModel):
+    messages: List[Dict]
+    time_window_days: Optional[int] = 30  # Default to 30 days
+
+class SMSSearchRequest(BaseModel):
+    query: str
+    top_k: int = 10
+    time_window_days: Optional[int] = None
+    contact: Optional[str] = None
+
+class SmartQueryRequest(BaseModel):
+    message: str
+    include_sms: bool = False
+    sms_messages: Optional[List[Dict]] = None
+    include_notifications: bool = False
+    include_chat_history: bool = False
+
+class SmartQueryResponse(BaseModel):
+    response: str
+    context_used: Dict
 # In-memory store for subordinate agent tasks and results
 subordinate_tasks: Dict[str, Dict[str, Any]] = {}
 # In-memory store for tasks and results
@@ -669,12 +726,32 @@ async def process_audio_with_stt(file_path: str) -> str:
 
 async def generate_ai_response(transcript: str, room: str, context_data: dict = None) -> str:
     """
-    Generate AI response to transcript with context data
+    Generate AI response to transcript with context data, now with SMS RAG support
     """
     try:
         logger.info(f"🤖 Generating AI response to: {transcript[:50]}...")
 
-        # Build enhanced context prompt for AgentZero
+        # Use SmartQueryRequest for enhanced context processing if SMS RAG is available
+        if SMS_RAG_AVAILABLE and sms_store and query_analyzer and context_data and context_data.get('includeMessages'):
+            try:
+                # Create smart query request
+                smart_request = SmartQueryRequest(
+                    message=transcript,
+                    include_sms=True,
+                    sms_messages=context_data.get('smsMessages', []),
+                    include_notifications=context_data.get('includeNotifications', False),
+                    include_chat_history=context_data.get('includeChatHistory', False)
+                )
+
+                # Use smart query processing
+                result = await smart_query(smart_request)
+                if result.response and result.response.strip():
+                    logger.info(f"✅ AI response generated with SMS RAG: {result.response[:50]}...")
+                    return result.response
+            except Exception as smart_query_error:
+                logger.warning(f"⚠️ Smart query failed, falling back to legacy method: {smart_query_error}")
+
+        # Fallback to original context building method
         context_parts = []
 
         # Start with the user query
@@ -690,8 +767,8 @@ async def generate_ai_response(transcript: str, room: str, context_data: dict = 
                 context_parts.append("\n--- Recent App Notifications ---")
                 for i, notif in enumerate(context_data['notifications'], 1):
                     app_name = notif.get('packageName', 'Unknown').split('.')[-1].capitalize()
-                    title = notif.get('title', '')
-                    body = notif.get('body', '')
+                    title = notif.get('title', 'No Title')
+                    body = notif.get('body', 'No Body')
                     context_parts.append(f"{i}. {app_name}: {title}")
                     if body and body != title:
                         context_parts.append(f"   Content: {body}")
@@ -707,24 +784,52 @@ async def generate_ai_response(transcript: str, room: str, context_data: dict = 
                     context_parts.append(f"{sender}: {text}")
                 logger.info(f"💬 Added {len(context_data['chatHistory'])} chat messages to context")
 
-            # Add SMS messages context (if available from client)
-            sms_messages = context_data.get('smsMessages', [])
-            if context_data.get('includeMessages') and sms_messages:
-                has_context = True
-                context_parts.append("\n--- Recent SMS Messages ---")
-                for i, sms in enumerate(sms_messages, 1):
-                    sender = sms.get('address', 'Unknown')
-                    body = sms.get('body', '')
-                    date = sms.get('date', '')
-                    context_parts.append(f"{i}. From: {sender}")
-                    context_parts.append(f"   Message: {body}")
-                    if date:
-                        context_parts.append(f"   Time: {date}")
-                logger.info(f"📱 Added {len(sms_messages)} SMS messages to context")
-            elif context_data.get('includeMessages') and not sms_messages:
-                context_parts.append("\n--- Recent SMS Messages ---")
-                context_parts.append("No recent SMS messages available.")
-                logger.info("📱 SMS messages requested but none available")
+            # Add SMS messages context using semantic search if available
+            if context_data.get('includeMessages'):
+                if SMS_RAG_AVAILABLE and sms_store:
+                    try:
+                        # Use semantic search to find relevant SMS messages
+                        logger.info(f"🔍 Performing semantic SMS search for: {transcript[:50]}...")
+                        sms_results = await asyncio.to_thread(
+                            sms_store.search_sms,
+                            transcript,
+                            top_k=5,  # Only get top 5 most relevant messages
+                            time_window_days=30  # Last 30 days
+                        )
+
+                        if sms_results:
+                            has_context = True
+                            context_parts.append("\n--- Relevant SMS Messages (Semantic Search) ---")
+                            formatted_sms = format_sms_results_for_context(sms_results)
+                            context_parts.append(formatted_sms)
+                            logger.info(f"📱 Added {len(sms_results)} semantically relevant SMS messages to context")
+                        else:
+                            context_parts.append("\n--- Relevant SMS Messages ---")
+                            context_parts.append("No relevant SMS messages found in your message history.")
+                            logger.info("📱 Semantic SMS search returned no results")
+                    except Exception as sms_error:
+                        logger.error(f"SMS semantic search error: {sms_error}")
+                        context_parts.append("\n--- SMS Messages ---")
+                        context_parts.append("SMS search temporarily unavailable.")
+                else:
+                    # Fallback to provided SMS messages if vector store not available
+                    sms_messages = context_data.get('smsMessages', [])
+                    if sms_messages:
+                        has_context = True
+                        context_parts.append("\n--- Recent SMS Messages (Chronological) ---")
+                        for i, sms in enumerate(sms_messages, 1):
+                            sender = sms.get('address', 'Unknown')
+                            body = sms.get('body', '')
+                            date = sms.get('date', '')
+                            context_parts.append(f"{i}. From: {sender}")
+                            context_parts.append(f"   Message: {body}")
+                            if date:
+                                context_parts.append(f"   Time: {date}")
+                        logger.info(f"📱 Added {len(sms_messages)} SMS messages to context (fallback mode)")
+                    else:
+                        context_parts.append("\n--- Recent SMS Messages ---")
+                        context_parts.append("No recent SMS messages available.")
+                        logger.info("📱 SMS messages requested but none available")
 
         # Add instruction for context-aware responses
         if has_context:
@@ -963,6 +1068,9 @@ async def health_check():
         "voice_services_available": VOICE_SERVICES_AVAILABLE,
         "stt_initialized": stt_server is not None,
         "tts_initialized": tts_server is not None,
+        "sms_rag_available": SMS_RAG_AVAILABLE,
+        "sms_store_initialized": sms_store is not None,
+        "query_analyzer_initialized": query_analyzer is not None,
         "active_tasks": len(query_tasks),
         "uptime_seconds": time.time() - start_time if 'start_time' in globals() else 0
     }
@@ -990,6 +1098,177 @@ async def clear_cache():
         "message": f"Cleared {cleared_count} cache entries",
         "cleared_count": cleared_count
     }
+
+# SMS RAG Endpoints
+@app.post("/index-sms")
+async def index_sms_messages(request: SMSIndexRequest):
+    """
+    Index SMS messages for semantic search with time window filtering.
+
+    Args:
+        request: Contains messages list and time_window_days (default 30)
+
+    Returns:
+        Indexing statistics (indexed, skipped, errors, total)
+    """
+    if not SMS_RAG_AVAILABLE or not sms_store:
+        raise HTTPException(status_code=503, detail="SMS RAG services not available")
+
+    try:
+        logger.info(f"Indexing {len(request.messages)} SMS messages with {request.time_window_days} day window")
+
+        # Index messages in background thread
+        result = await asyncio.to_thread(
+            sms_store.add_sms_batch,
+            request.messages,
+            request.time_window_days
+        )
+
+        logger.info(f"SMS indexing complete: {result}")
+        return {
+            "status": "success",
+            **result
+        }
+    except Exception as e:
+        logger.error(f"SMS indexing error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/smart-query")
+async def smart_query(request: SmartQueryRequest):
+    """Process query with intelligent SMS context retrieval"""
+    try:
+        context_parts = []
+        context_metadata = {}
+
+        # Analyze if SMS context is needed
+        if request.include_sms and query_analyzer and sms_store and query_analyzer.needs_sms_context(request.message):
+            # Use provided SMS messages or get from database
+            sms_context = ""
+            if request.sms_messages:
+                # Index provided SMS messages first
+                await asyncio.to_thread(sms_store.add_sms_batch, request.sms_messages)
+
+            # Get relevant SMS context via semantic search
+            sms_context = await asyncio.to_thread(
+                sms_store.get_relevant_context,
+                request.message,
+                max_tokens=1500
+            )
+
+            # Extract query filters
+            filters = query_analyzer.extract_query_filters(request.message)
+
+            if sms_context:
+                context_parts.append(f"Relevant SMS Messages:\n{sms_context}")
+                context_metadata['sms_included'] = True
+                context_metadata['sms_filters'] = filters
+
+        # Build final prompt with context
+        final_prompt = request.message
+        if context_parts:
+            final_prompt = f"Context:\n{chr(10).join(context_parts)}\n\nUser Query: {request.message}"
+
+        logger.info(f"Smart query prompt length: {len(final_prompt)}")
+
+        # Call AgentZero AI with enhanced context
+        ai_response = await call_agent_zero(final_prompt, is_context_enhanced=True)
+
+        return SmartQueryResponse(
+            response=ai_response,
+            context_used=context_metadata
+        )
+
+    except Exception as e:
+        logger.error(f"Smart query error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/sms-search")
+async def search_sms_messages(request: SMSSearchRequest):
+    """
+    Direct semantic search endpoint for SMS with filters.
+
+    Args:
+        request: Contains query, top_k, time_window_days, contact filters
+
+    Returns:
+        List of matching SMS messages with similarity scores
+    """
+    if not SMS_RAG_AVAILABLE or not sms_store:
+        raise HTTPException(status_code=503, detail="SMS RAG services not available")
+
+    try:
+        results = await asyncio.to_thread(
+            sms_store.search_sms,
+            request.query,
+            top_k=request.top_k,
+            time_window_days=request.time_window_days,
+            contact=request.contact
+        )
+        return {"results": results, "count": len(results)}
+    except Exception as e:
+        logger.error(f"SMS search error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/sms-recent")
+async def get_recent_sms_messages(
+    limit: int = 10,
+    contact: Optional[str] = None,
+    days: int = 7
+):
+    """
+    Get recent SMS messages (chronological order).
+
+    Args:
+        limit: Max number of messages to return
+        contact: Optional contact filter
+        days: Number of days to look back (default 7)
+
+    Returns:
+        List of recent SMS messages
+    """
+    if not SMS_RAG_AVAILABLE or not sms_store:
+        raise HTTPException(status_code=503, detail="SMS RAG services not available")
+
+    try:
+        results = await asyncio.to_thread(
+            sms_store.get_recent_sms,
+            limit=limit,
+            contact=contact,
+            days=days
+        )
+        return {"results": results, "count": len(results)}
+    except Exception as e:
+        logger.error(f"SMS recent messages error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/sms-count")
+async def count_sms_messages(
+    contact: Optional[str] = None,
+    days: Optional[int] = None
+):
+    """
+    Count total SMS messages in the store.
+
+    Args:
+        contact: Optional contact filter
+        days: Optional time window in days
+
+    Returns:
+        Count of SMS messages
+    """
+    if not SMS_RAG_AVAILABLE or not sms_store:
+        raise HTTPException(status_code=503, detail="SMS RAG services not available")
+
+    try:
+        count = await asyncio.to_thread(
+            sms_store.count_sms,
+            contact=contact,
+            days=days
+        )
+        return {"count": count}
+    except Exception as e:
+        logger.error(f"SMS count error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # FastRTC Integration Endpoints
 
@@ -1241,8 +1520,188 @@ async def process_voice_message(data: dict = Body(...)):
         logger.error(f"Voice processing error: {e}")
         return {"type": "error", "error": str(e)}
 
-async def call_agent_zero(query_text: str, is_context_enhanced: bool = False) -> str:
-    """Call AgentZero for AI response with enhanced context support"""
+# ================ MCP Tools for SMS Search ================
+
+def get_sms_tools_schema() -> List[Dict]:
+    """
+    Get MCP tool schema definitions for SMS search capabilities.
+    These tools can be provided to AgentZero for dynamic SMS context retrieval.
+    """
+    return [
+        {
+            "name": "search_sms",
+            "description": "Semantically search through the user's SMS messages to find relevant conversations. Use this when the user asks about messages, texts, or specific information that might be in their SMS history.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query to find relevant SMS messages"
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "description": "Number of most relevant messages to return (default: 5)",
+                        "default": 5
+                    },
+                    "time_window_days": {
+                        "type": "integer",
+                        "description": "Only search messages from the last N days (optional)",
+                        "default": None
+                    },
+                    "contact": {
+                        "type": "string",
+                        "description": "Filter by contact phone number or name (optional)",
+                        "default": None
+                    }
+                },
+                "required": ["query"]
+            }
+        },
+        {
+            "name": "get_recent_sms",
+            "description": "Get the most recent SMS messages in chronological order. Use this when the user asks about their latest messages or recent conversations.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of messages to return (default: 5)",
+                        "default": 5
+                    },
+                    "contact": {
+                        "type": "string",
+                        "description": "Filter by contact phone number or name (optional)",
+                        "default": None
+                    },
+                    "days": {
+                        "type": "integer",
+                        "description": "Number of days to look back (default: 7)",
+                        "default": 7
+                    }
+                },
+                "required": []
+            }
+        },
+        {
+            "name": "count_sms",
+            "description": "Count the total number of SMS messages in the database. Use this when the user asks how many messages they have.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "contact": {
+                        "type": "string",
+                        "description": "Filter by contact phone number or name (optional)",
+                        "default": None
+                    },
+                    "days": {
+                        "type": "integer",
+                        "description": "Count only messages from the last N days (optional)",
+                        "default": None
+                    }
+                },
+                "required": []
+            }
+        }
+    ]
+
+async def execute_sms_tool(tool_name: str, tool_input: Dict) -> Dict:
+    """
+    Execute an SMS tool and return the result.
+
+    Args:
+        tool_name: Name of the tool to execute (search_sms, get_recent_sms, count_sms)
+        tool_input: Input parameters for the tool
+
+    Returns:
+        Tool execution result
+    """
+    if not SMS_RAG_AVAILABLE or not sms_store:
+        return {"error": "SMS RAG services not available"}
+
+    try:
+        if tool_name == "search_sms":
+            results = await asyncio.to_thread(
+                sms_store.search_sms,
+                tool_input.get("query"),
+                top_k=tool_input.get("top_k", 5),
+                time_window_days=tool_input.get("time_window_days"),
+                contact=tool_input.get("contact")
+            )
+            return {
+                "results": results,
+                "count": len(results),
+                "tool": "search_sms"
+            }
+
+        elif tool_name == "get_recent_sms":
+            results = await asyncio.to_thread(
+                sms_store.get_recent_sms,
+                limit=tool_input.get("limit", 5),
+                contact=tool_input.get("contact"),
+                days=tool_input.get("days", 7)
+            )
+            return {
+                "results": results,
+                "count": len(results),
+                "tool": "get_recent_sms"
+            }
+
+        elif tool_name == "count_sms":
+            count = await asyncio.to_thread(
+                sms_store.count_sms,
+                contact=tool_input.get("contact"),
+                days=tool_input.get("days")
+            )
+            return {
+                "count": count,
+                "tool": "count_sms"
+            }
+
+        else:
+            return {"error": f"Unknown tool: {tool_name}"}
+
+    except Exception as e:
+        logger.error(f"Error executing SMS tool {tool_name}: {e}")
+        return {"error": str(e)}
+
+def format_sms_results_for_context(results: List[Dict]) -> str:
+    """
+    Format SMS search results into a readable context string for the AI.
+
+    Args:
+        results: List of SMS message dictionaries
+
+    Returns:
+        Formatted context string
+    """
+    if not results:
+        return "No matching SMS messages found."
+
+    context_parts = []
+    for i, msg in enumerate(results, 1):
+        date_iso = msg.get('date_iso', '')
+        address = msg.get('address', 'unknown')
+        body = msg.get('body', '')
+        similarity = msg.get('similarity', 0)
+
+        context_parts.append(
+            f"{i}. [{date_iso}] From {address} (relevance: {similarity:.2f}):\n   {body}"
+        )
+
+    return "\n\n".join(context_parts)
+
+async def call_agent_zero(query_text: str, is_context_enhanced: bool = False, tools_enabled: bool = True) -> str:
+    """
+    Call AgentZero for AI response with enhanced context support and MCP tools.
+
+    Args:
+        query_text: The query or context to send
+        is_context_enhanced: Whether the query includes additional context
+        tools_enabled: Whether to provide SMS search tools to the agent
+
+    Returns:
+        AI response string
+    """
     try:
         if is_context_enhanced:
             logger.info(f"🤖 Sending enhanced context query to AgentZero (length: {len(query_text)} chars)")
@@ -1269,7 +1728,20 @@ async def call_agent_zero(query_text: str, is_context_enhanced: bool = False) ->
             "Content-Type": "application/json"
         }
 
+        # Build payload with tools if enabled
         payload = {"text": query_text}
+
+        # Add SMS tools information to the system context if available
+        if tools_enabled and SMS_RAG_AVAILABLE and sms_store:
+            tools_info = get_sms_tools_schema()
+            sms_count = await asyncio.to_thread(sms_store.count_sms)
+
+            # Append tool availability information to the query
+            tools_context = f"\n\n--- Available Tools ---\nYou have access to the user's SMS message database ({sms_count} messages indexed). You can search through their messages to find relevant information. To use this capability, explicitly mention in your response what SMS information you would need, and I will retrieve it for you in a follow-up interaction."
+
+            payload["text"] = query_text + tools_context
+            logger.info(f"🔧 Added SMS tools context ({sms_count} messages available)")
+
         response = requests.post(
             message_url,
             headers=headers,
