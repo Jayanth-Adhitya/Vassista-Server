@@ -17,10 +17,8 @@ from typing import AsyncGenerator, Dict, Any, List, Optional
 import uuid
 
 # MCP SSE imports
-from mcp.server import Server
-from mcp.server.sse import SseServerTransport
-from mcp.types import Tool, TextContent
-# from sse_starlette.sse import EventSourceResponse  # Not needed - SSE transport handles it
+from mcp.server.fastmcp import FastMCP
+from mcp.types import TextContent
 
 # Set up logging first
 logging.basicConfig(level=logging.INFO)
@@ -174,54 +172,97 @@ app.add_middleware(
 )
 
 # ================ MCP SSE Server Setup ================
-# Create MCP server for SMS tools
-mcp_server = Server("sms-search-server")
+# Create FastMCP server for SMS tools
+mcp_server = FastMCP("sms-search")
 
-@mcp_server.list_tools()
-async def mcp_list_tools() -> list[Tool]:
-    """List all SMS tools available via MCP"""
-    tools_schema = get_sms_tools_schema()
+@mcp_server.tool()
+async def search_sms(query: str, top_k: int = 10, time_window_days: int = None, contact: str = None) -> str:
+    """
+    Search through SMS messages semantically using vector similarity.
 
-    mcp_tools = []
-    for tool_info in tools_schema:
-        mcp_tools.append(Tool(
-            name=tool_info["name"],
-            description=tool_info["description"],
-            inputSchema=tool_info["input_schema"]
-        ))
+    Args:
+        query: The search query (e.g., "money received", "doctor appointment")
+        top_k: Number of results to return (default: 10)
+        time_window_days: Filter messages from last N days (optional)
+        contact: Filter by contact name/number (optional)
 
-    logger.info(f"📋 MCP SSE: Listed {len(mcp_tools)} tools")
-    return mcp_tools
+    Returns:
+        Formatted SMS results with date, contact, and message content
+    """
+    logger.info(f"🔧 MCP Tool: search_sms - query='{query}', top_k={top_k}")
 
-@mcp_server.call_tool()
-async def mcp_call_tool(name: str, arguments: Any) -> list[TextContent]:
-    """Handle MCP tool calls via SSE"""
-    logger.info(f"🔧 MCP SSE Tool Call: {name} with args: {arguments}")
-
-    # Execute the tool using our existing function
-    result = await execute_sms_tool(name, arguments)
+    result = await execute_sms_tool("search_sms", {
+        "query": query,
+        "top_k": top_k,
+        "time_window_days": time_window_days,
+        "contact": contact
+    })
 
     if "error" in result:
-        return [TextContent(
-            type="text",
-            text=f"Error: {result['error']}"
-        )]
+        return f"Error: {result['error']}"
 
-    # Format the result
-    if name == "search_sms" or name == "get_recent_sms":
-        results = result.get("results", [])
-        if not results:
-            return [TextContent(type="text", text="No SMS messages found.")]
+    results = result.get("results", [])
+    if not results:
+        return "No SMS messages found matching your query."
 
-        formatted = format_sms_results_for_context(results)
-        return [TextContent(type="text", text=formatted)]
+    return format_sms_results_for_context(results)
 
-    elif name == "count_sms":
-        count = result.get("count", 0)
-        return [TextContent(type="text", text=f"Total SMS messages: {count}")]
+@mcp_server.tool()
+async def get_recent_sms(limit: int = 10, days: int = 7, contact: str = None) -> str:
+    """
+    Get recent SMS messages chronologically.
 
-    else:
-        return [TextContent(type="text", text=str(result))]
+    Args:
+        limit: Maximum number of messages to return (default: 10)
+        days: Look back N days (default: 7)
+        contact: Filter by contact name/number (optional)
+
+    Returns:
+        Formatted list of recent SMS messages
+    """
+    logger.info(f"🔧 MCP Tool: get_recent_sms - limit={limit}, days={days}")
+
+    result = await execute_sms_tool("get_recent_sms", {
+        "limit": limit,
+        "days": days,
+        "contact": contact
+    })
+
+    if "error" in result:
+        return f"Error: {result['error']}"
+
+    results = result.get("results", [])
+    if not results:
+        return f"No SMS messages found in the last {days} days."
+
+    return format_sms_results_for_context(results)
+
+@mcp_server.tool()
+async def count_sms(days: int = None, contact: str = None) -> str:
+    """
+    Count total SMS messages.
+
+    Args:
+        days: Count from last N days (optional, counts all if not specified)
+        contact: Filter by contact name/number (optional)
+
+    Returns:
+        Total count of SMS messages matching filters
+    """
+    logger.info(f"🔧 MCP Tool: count_sms - days={days}, contact={contact}")
+
+    result = await execute_sms_tool("count_sms", {
+        "days": days,
+        "contact": contact
+    })
+
+    if "error" in result:
+        return f"Error: {result['error']}"
+
+    count = result.get("count", 0)
+    time_str = f" from the last {days} days" if days else ""
+    contact_str = f" from {contact}" if contact else ""
+    return f"Total SMS messages{time_str}{contact_str}: {count}"
 
 # Configuration for MCP servers 
 CLIENT_CONFIG = {
@@ -1362,42 +1403,17 @@ async def count_sms_messages(
 
 # ================ MCP SSE Endpoints for Remote AgentZero ================
 
-# Create SSE transport with messages path
-sse_transport = SseServerTransport("/mcp/messages/")
+# Mount FastMCP's SSE app at /mcp endpoint
+# This provides both /mcp/sse (for SSE connections) and /mcp/messages/ (for POST messages)
+logger.info("🔌 Mounting MCP SSE server at /mcp")
+app.mount("/mcp", mcp_server.sse_app())
 
-@app.get("/mcp/sse")
-async def handle_sse(request: Request):
-    """
-    SSE endpoint for MCP - AgentZero connects here for real-time tool access.
-    This is the endpoint AgentZero will use to discover and call SMS tools.
-    """
-    from starlette.responses import Response
-    logger.info("🌊 MCP SSE Connection established")
+# ================ Legacy HTTP MCP Endpoints (Not Used - FastMCP handles via SSE) ================
+# These endpoints are kept for reference but are not active since /mcp is mounted to FastMCP SSE server
+# To use these, you would need to mount them at a different path like /api/mcp/tools
 
-    async with sse_transport.connect_sse(
-        request.scope,
-        request.receive,
-        request._send
-    ) as streams:
-        read_stream, write_stream = streams
-        try:
-            await mcp_server.run(
-                read_stream,
-                write_stream,
-                mcp_server.create_initialization_options()
-            )
-        except Exception as e:
-            logger.error(f"❌ MCP SSE error: {e}")
-            raise
-
-    return Response()
-
-# Mount the message handler as an ASGI app
-app.mount("/mcp/messages/", sse_transport.handle_post_message)
-
-# ================ MCP Tools HTTP Endpoints for AgentZero ================
-
-@app.get("/mcp/tools")
+# @app.get("/mcp/tools") - DISABLED: Conflicts with FastMCP mount
+@app.get("/api/mcp/tools")
 async def list_mcp_tools():
     """
     List all available MCP tools for AgentZero.
@@ -1419,7 +1435,7 @@ class MCPToolCallRequest(BaseModel):
     tool_name: str
     arguments: Dict[str, Any]
 
-@app.post("/mcp/call-tool")
+@app.post("/api/mcp/call-tool")
 async def call_mcp_tool(request: MCPToolCallRequest):
     """
     Execute an MCP tool call from AgentZero.
