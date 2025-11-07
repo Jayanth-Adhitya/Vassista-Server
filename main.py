@@ -191,6 +191,12 @@ AGENT_ZERO_URL = "https://ao.uptopoint.net"
 # Request models
 class QueryRequest(BaseModel):
     context: str
+    includeMessages: Optional[bool] = False
+    includeNotifications: Optional[bool] = False
+    includeChatHistory: Optional[bool] = False
+    notifications: Optional[List[Dict]] = []
+    chatHistory: Optional[List[Dict]] = []
+
 class QueryResponse(BaseModel):
     result: str
 class TextToSpeechRequest(BaseModel):
@@ -309,26 +315,50 @@ def optimize_context(context: str) -> str:
 @app.post("/query")
 async def submit_query(req: QueryRequest, background_tasks: BackgroundTasks):
     """
-    Legacy endpoint - kept for backwards compatibility. Prefer FastRTC WebRTC streaming.
+    Text chat endpoint with SMS semantic search support.
+    Now supports includeMessages flag for automatic SMS context retrieval.
     """
     task_id = str(uuid.uuid4())
     query_tasks[task_id] = {"status": "running", "result": None}
-    
+
     # Log the received request for debugging
-    logger.info(f"Received query request: {req.context}")
+    logger.info(f"📝 Received text query request: {req.context[:100]}...")
+    logger.info(f"🔍 includeMessages: {req.includeMessages}")
 
     async def run_task():
         try:
+            # If SMS context is requested, use generate_ai_response() with semantic search
+            if req.includeMessages and SMS_RAG_AVAILABLE and sms_store:
+                logger.info("🔍 Using SMS semantic search for text query")
+
+                # Build context data
+                context_data = {
+                    'includeMessages': req.includeMessages,
+                    'includeNotifications': req.includeNotifications,
+                    'includeChatHistory': req.includeChatHistory,
+                    'notifications': req.notifications or [],
+                    'chatHistory': req.chatHistory or []
+                }
+
+                # Use generate_ai_response which includes SMS semantic search
+                result_text = await generate_ai_response(req.context, "default", context_data)
+
+                query_tasks[task_id] = {"status": "completed", "result": result_text}
+                return
+
+            # Fallback to direct AgentZero call (no SMS search)
+            logger.info("📤 Using direct AgentZero call (no SMS search)")
+
             # Fetch CSRF token and cookies
             csrf_url = f"{AGENT_ZERO_URL}/csrf_token"
             csrf_response = requests.get(csrf_url, verify=False) # verify=False for self-signed certs if any
             csrf_response.raise_for_status()
-            
+
             csrf_json = csrf_response.json()
-            
+
             csrf_token = csrf_json.get("token") # Corrected key from "csrf_token" to "token"
             cookies = csrf_response.cookies
-            
+
             if not csrf_token:
                 raise ValueError(f"CSRF token not found in response. Full response: {csrf_json}")
 
@@ -340,21 +370,21 @@ async def submit_query(req: QueryRequest, background_tasks: BackgroundTasks):
             }
             # Log the constructed query for debugging
             logger.info(f"Constructed query for AgentZero: {req.context}")
-            
+
             payload = {"text": req.context}
-            
+
             agent_response = requests.post(
-                message_url, 
-                headers=headers, 
-                cookies=cookies, 
-                json=payload, 
+                message_url,
+                headers=headers,
+                cookies=cookies,
+                json=payload,
                 verify=False # verify=False for self-signed certs if any
             )
-            
+
             # Log the full response from AgentZero for debugging
             logger.info(f"AgentZero response status: {agent_response.status_code}")
             logger.info(f"AgentZero response content: {agent_response.text}")
-            
+
             agent_response.raise_for_status() # This will raise an exception for bad status codes
 
             agent_result_json = agent_response.json()
@@ -558,7 +588,7 @@ async def upload_audio_file(
             try:
                 import json
                 parsed_context_data = json.loads(context_data)
-                logger.info(f"📊 Context data received: {len(parsed_context_data.get('notifications', []))} notifications, {len(parsed_context_data.get('chatHistory', []))} chat messages, {len(parsed_context_data.get('smsMessages', []))} SMS messages")
+                logger.info(f"📊 Context data received: {len(parsed_context_data.get('notifications', []))} notifications, {len(parsed_context_data.get('chatHistory', []))} chat messages, includeMessages={parsed_context_data.get('includeMessages', False)}")
             except json.JSONDecodeError as e:
                 logger.warning(f"⚠️ Failed to parse context data: {e}")
                 parsed_context_data = {}
@@ -653,7 +683,7 @@ async def process_uploaded_audio_file(file_path: str, room: str, client_id: str,
         logger.info(f"📝 Final transcript: {transcript}")
 
         # Generate AI response with context
-        ai_response = await generate_ai_response(transcript, room, context_data)
+        ai_response = await generate_ai_response(transcript, room, parsed_context_data)
 
         # Generate streaming TTS audio
         await generate_streaming_tts_audio(ai_response, room, client_id, transcript, session_id)
@@ -730,6 +760,7 @@ async def generate_ai_response(transcript: str, room: str, context_data: dict = 
     """
     try:
         logger.info(f"🤖 Generating AI response to: {transcript[:50]}...")
+        logger.info(f"📋 Context data received: {context_data}")
 
         # Use SmartQueryRequest for enhanced context processing if SMS RAG is available
         if SMS_RAG_AVAILABLE and sms_store and query_analyzer and context_data and context_data.get('includeMessages'):
@@ -785,6 +816,8 @@ async def generate_ai_response(transcript: str, room: str, context_data: dict = 
                 logger.info(f"💬 Added {len(context_data['chatHistory'])} chat messages to context")
 
             # Add SMS messages context using semantic search if available
+            logger.info(f"🔍 SMS Context Check: includeMessages={context_data.get('includeMessages') if context_data else None}, SMS_RAG_AVAILABLE={SMS_RAG_AVAILABLE}, sms_store={'exists' if sms_store else 'None'}")
+
             if context_data.get('includeMessages'):
                 if SMS_RAG_AVAILABLE and sms_store:
                     try:
