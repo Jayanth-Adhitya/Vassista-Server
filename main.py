@@ -2013,43 +2013,37 @@ async def call_agent_zero(query_text: str, is_context_enhanced: bool = False, to
             "Content-Type": "application/json"
         }
 
-        # Build payload with tools if enabled
+        # Build payload with automatic SMS search
         payload = {"text": query_text}
 
-        # Add SMS tools information to the system context if available
+        # Automatically search and include relevant SMS messages in context
         if tools_enabled and SMS_RAG_AVAILABLE and sms_store:
-            tools_info = get_sms_tools_schema()
-            sms_count = await asyncio.to_thread(sms_store.count_sms)
+            logger.info(f"🔍 Performing semantic SMS search for query: {query_text[:100]}...")
 
-            # Get the base URL of our server
-            server_url = "https://zswok4sc8c44w804kw8gss8g.uptopoint.net"
+            # Do semantic search on the SMS database
+            sms_results = await asyncio.to_thread(
+                sms_store.search_sms,
+                query_text,
+                top_k=5,  # Get top 5 relevant messages
+                time_window_days=30  # Last 30 days
+            )
 
-            # Append tool availability information with MCP endpoints
-            tools_context = f"""
+            if sms_results:
+                # Format the SMS results
+                formatted_sms = format_sms_results_for_context(sms_results)
 
---- Available MCP Tools ---
-You have access to the user's SMS message database ({sms_count} messages indexed).
+                # Add SMS context to the query
+                sms_context = f"""
 
-To use SMS tools, you can call these endpoints:
+--- Relevant SMS Messages from User's Phone ---
+{formatted_sms}
 
-1. **search_sms** - Search SMS semantically
-   Endpoint: POST {server_url}/mcp/call-tool
-   Payload: {{"tool_name": "search_sms", "arguments": {{"query": "your search query", "top_k": 10}}}}
+Note: The above SMS messages were automatically retrieved from the user's phone based on semantic relevance to their query."""
 
-2. **get_recent_sms** - Get recent SMS messages
-   Endpoint: POST {server_url}/mcp/call-tool
-   Payload: {{"tool_name": "get_recent_sms", "arguments": {{"limit": 10, "days": 7}}}}
-
-3. **count_sms** - Count total SMS
-   Endpoint: POST {server_url}/mcp/call-tool
-   Payload: {{"tool_name": "count_sms", "arguments": {{"days": 30}}}}
-
-Tool List: GET {server_url}/mcp/tools
-
-IMPORTANT: When the user asks about SMS, messages, or money transactions, USE THESE TOOLS by making HTTP POST requests to retrieve the actual data. Don't just mention that you need the information - actively fetch it using the endpoints above."""
-
-            payload["text"] = query_text + tools_context
-            logger.info(f"🔧 Added MCP SMS tools context ({sms_count} messages available)")
+                payload["text"] = query_text + sms_context
+                logger.info(f"✅ Added {len(sms_results)} relevant SMS messages to context")
+            else:
+                logger.info(f"📭 No relevant SMS messages found for this query")
 
         response = requests.post(
             message_url,
